@@ -1,0 +1,142 @@
+{
+  "name": "juicewrldapi-desktop",
+  "version": "0.0.1",
+  "description": "JuiceWRLD API Desktop Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:mac-universal": "electron-builder --mac --universal",
+    "build:mac-arm64": "electron-builder --mac --arm64",
+    "build:mac-x64": "electron-builder --mac --x64",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder -mwl"
+  },
+  "keywords": [
+    "juicewrld",
+    "api",
+    "desktop",
+    "electron"
+  ],
+  "author": "JuiceWRLD API Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4",
+    "cross-env": "^7.0.3"
+  },
+  "dependencies": {
+    "conf": "^10.2.0",
+    "electron-store": "^8.1.0",
+    "id3js": "^1.1.3",
+    "music-metadata": "^11.9.0",
+    "discord-rpc": "^4.0.1",
+    "type-fest": "^2.17.0"
+  },
+  "build": {
+    "appId": "com.juicewrldapi.desktop",
+    "productName": "JuiceWRLD-API",
+    "directories": {
+      "output": "dist-new",
+      "buildResources": "build"
+    },
+    "icon": "build/icon.ico",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "executableName": "JuiceWRLD-API",
+      "verifyUpdateCodeSignature": false,
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "certificateFile": null,
+      "certificatePassword": null,
+      "fileAssociations": [
+        {
+          "ext": "mp3",
+          "name": "Audio File",
+          "description": "Audio file",
+          "icon": "build/icon.ico"
+        }
+      ]
+    },
+    "mac": {
+      "icon": "build/icon-mac.icns",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSHighResolutionCapable": true,
+        "NSRequiresAquaSystemAppearance": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Audio",
+            "CFBundleTypeExtensions": [
+              "mp3",
+              "wav",
+              "flac",
+              "aac"
+            ],
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Default"
+          }
+        ]
+      }
+    },
+    "dmg": {
+      "icon": "build/icon-mac.icns"
+    },
+    "linux": {
+      "icon": "assets/icon_512x512.png",
+      "target": "AppImage"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeader": "build/icon.ico",
+      "installerSidebar": "build/icon.ico"
+    },
+    "artifactName": "${productName}-${version}.${ext}",
+    "compression": "maximum",
+    "forceCodeSigning": false,
+    "removePackageScripts": false,
+    "removePackageKeywords": false,
+    "buildDependenciesFromSource": false,
+    "npmRebuild": false
+  }
+}

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JuiceWRLD API</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="titlebar">
+        <div class="titlebar-icon">
+            <img src="assets/icon_32x32.png" alt="App Icon">
+        </div>
+        <div class="titlebar-center">
+            <span class="titlebar-title">JuiceWRLD API</span>
+        </div>
+        <div class="titlebar-controls">
+            <button id="minimizeBtn" class="titlebar-button"><i class="fas fa-window-minimize"></i></button>
+            <button id="maximizeBtn" class="titlebar-button"><i class="fas fa-window-maximize"></i></button>
+            <button id="closeBtn" class="titlebar-button close"><i class="fas fa-times"></i></button>
+        </div>
+    </div>
+    <div class="app-container" style="padding-top:36px;">
+        <header class="app-header">
+            <div class="header-content">
+                <div class="logo">
+                    <img src="assets/icon_128x128.png" alt="JuiceWRLD API" style="width: 48px; height: 48px;">
+                    <h1>JuiceWRLD API</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" id="syncBtn">
+                        <i class="fas fa-sync-alt"></i>
+                        Start Sync
+                    </button>
+                    <button class="btn btn-secondary" id="playerModeBtn" onclick="window.electronAPI.openPlayerMode()">
+                        <i class="fas fa-music"></i>
+                        Player
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <nav class="tab-navigation">
+                <button class="tab-btn active" data-tab="overview">
+                    <i class="fas fa-home"></i>
+                    Overview
+                </button>
+                <button class="tab-btn" data-tab="files">
+                    <i class="fas fa-folder"></i>
+                    Server Files
+                </button>
+                <button class="tab-btn" data-tab="local-files">
+                    <i class="fas fa-download"></i>
+                    Local Files
+                </button>
+                <button class="tab-btn" data-tab="history">
+                    <i class="fas fa-history"></i>
+                    History
+                </button>
+                <button class="tab-btn" data-tab="transfers">
+                    <i class="fas fa-exchange-alt"></i>
+                    Transfers
+                </button>
+                <button class="tab-btn" data-tab="settings">
+                    <i class="fas fa-cog"></i>
+                    Settings
+                </button>
+                <button class="tab-btn" data-tab="account">
+                    <i class="fas fa-user"></i>
+                    Account
+                </button>
+            </nav>
+
+            <div class="tab-content">
+                <div id="overview" class="tab-pane active">
+                    <div class="overview-grid">
+                        <div class="overview-card">
+                            <div class="card-header">
+                                <i class="fas fa-chart-line"></i>
+                                <h3>Sync Status</h3>
+                            </div>
+                            <div class="card-content">
+                                <div class="status-indicator" id="syncStatus">
+                                    <span class="status-text">Ready</span>
+                                    <div class="status-icon ready">
+                                        <i class="fas fa-check-circle"></i>
+                                    </div>
+                                </div>
+                                <div class="progress-container" id="progressContainer" style="display: none;">
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" id="progressFill"></div>
+                                    </div>
+                                    <span class="progress-text" id="progressText">0%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="overview-card">
+                            <div class="card-header">
+                                <i class="fas fa-info-circle"></i>
+                                <h3>Quick Stats</h3>
+                            </div>
+                            <div class="card-content">
+                                <div class="stat-item">
+                                    <span class="stat-label">Total Files:</span>
+                                    <span class="stat-value" id="totalFiles">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Last Sync:</span>
+                                    <span class="stat-value" id="lastSync">Never</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Sync Count:</span>
+                                    <span class="stat-value" id="syncCount">0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="overview-card">
+                            <div class="card-header">
+                                <i class="fas fa-wifi"></i>
+                                <h3>Connection Test</h3>
+                            </div>
+                            <div class="card-content">
+                                <button class="btn btn-secondary" id="testConnectionBtn" style="width: 100%; margin-bottom: 1rem;">
+                                    <i class="fas fa-plug"></i>
+                                    Test Connection
+                                </button>
+                                <div id="connectionTestResult" style="font-size: 0.9rem; color: #666; text-align: center;">
+                                    Click to test server connection
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="overview-card">
+                            <div class="card-header">
+                                <i class="fas fa-bolt"></i>
+                                <h3>Quick Actions</h3>
+                            </div>
+                            <div class="card-content">
+                                <div class="quick-actions">
+                                    <button class="action-btn" id="checkUpdatesBtn">
+                                        <i class="fas fa-download"></i>
+                                        Check Updates
+                                    </button>
+                                    <button class="action-btn" id="viewFilesBtn">
+                                        <i class="fas fa-folder-open"></i>
+                                        View Files
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="overview-card">
+                            <div class="card-header">
+                                <i class="fas fa-cog"></i>
+                                <h3>File Management</h3>
+                            </div>
+                            <div class="card-content">
+                                <div class="quick-actions">
+                                    <button class="action-btn" id="viewHistoryBtn">
+                                        <i class="fas fa-clock"></i>
+                                        View History
+                                    </button>
+                                    <button class="action-btn" id="manageFoldersBtn">
+                                        <i class="fas fa-folder-tree"></i>
+                                        Manage Folders
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="files" class="tab-pane">
+                    <div class="tab-header">
+                        <h2><i class="fas fa-folder"></i> Server Files</h2>
+                        <div class="tab-actions">
+                            <input type="text" id="fileSearch" placeholder="Search files..." class="search-input">
+                            <button id="refreshFilesBtn" class="btn btn-primary">
+                                <i class="fas fa-sync-alt"></i> Refresh
+                            </button>
+                            <button id="exportFilesBtn" class="btn btn-secondary">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                            <button id="scanFilesBtn" class="btn btn-secondary">
+                                <i class="fas fa-search"></i> Scan
+                            </button>
+                        </div>
+                    </div>
+                    <div id="filesList" class="files-list">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <p>Loading files...</p>
+                        </div>
+                    </div>
+                    <div id="files-pagination" style="display: none;"></div>
+                </div>
+
+                <div id="local-files" class="tab-pane">
+                    <div class="tab-header">
+                        <h2><i class="fas fa-download"></i> Local Files</h2>
+                        <div class="tab-actions">
+                            <button id="openLocalFolderBtn" class="btn btn-primary">
+                                <i class="fas fa-folder-open"></i> Open Folder
+                            </button>
+                            <button id="refreshLocalFilesBtn" class="btn btn-secondary">
+                                <i class="fas fa-sync-alt"></i> Refresh
+                            </button>
+                            <button id="clearLocalStorageBtn" class="btn btn-danger">
+                                <i class="fas fa-trash"></i> Clear All
+                            </button>
+                            <button id="testLocalFilesBtn" class="btn btn-warning" onclick="testLocalFilesAPI()">
+                                <i class="fas fa-bug"></i> Test API
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="storage-info">
+                        <div class="storage-card">
+                            <h3><i class="fas fa-hdd"></i> Storage Information</h3>
+                            <div id="storageInfo" class="storage-details">
+                                <div class="loading">
+                                    <div class="spinner"></div>
+                                    <p>Loading storage info...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="localFilesList" class="files-list">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <p>Loading local files...</p>
+                        </div>
+                    </div>
+                    <div id="local-files-pagination" style="display: none;"></div>
+                </div>
+
+                <div id="history" class="tab-pane">
+                    <div class="tab-header">
+                        <h2>Sync History</h2>
+                        <div class="tab-actions">
+                            <input type="text" id="historySearch" placeholder="Search history..." 
+                                   style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; margin-right: 1rem; min-width: 200px;"
+                                   oninput="filterHistory(this.value)">
+                            <button class="btn btn-secondary" id="refreshHistoryBtn">
+                                <i class="fas fa-refresh"></i>
+                                Refresh
+                            </button>
+                            <button class="btn btn-primary" id="exportHistoryBtn">
+                                <i class="fas fa-download"></i>
+                                Export
+                            </button>
+                            <button class="btn btn-danger" id="clearHistoryBtn">
+                                <i class="fas fa-trash"></i>
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                    <div class="history-container">
+                        <div class="history-list" id="historyList">
+                            <div class="empty-state">
+                                <i class="fas fa-history"></i>
+                                <p>No history available</p>
+                            </div>
+                        </div>
+                        <div id="history-pagination" style="display: none;"></div>
+                    </div>
+                </div>
+
+                <div id="transfers" class="tab-pane">
+                    <div class="tab-header">
+                        <h2>Active Transfers</h2>
+                        <div class="tab-actions">
+                            <input type="text" id="transfersSearch" placeholder="Search transfers..." 
+                                   style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; margin-right: 1rem; min-width: 200px;"
+                                   oninput="filterTransfers(this.value)">
+                            <button class="btn btn-secondary" id="refreshTransfersBtn">
+                                <i class="fas fa-refresh"></i>
+                                Refresh
+                            </button>
+                            <button class="btn btn-danger" id="clearCompletedBtn">
+                                <i class="fas fa-trash"></i>
+                                Clear Completed
+                            </button>
+                            <button class="btn btn-primary" id="exportTransfersBtn">
+                                <i class="fas fa-download"></i>
+                                Export
+                            </button>
+                        </div>
+                    </div>
+                    <div class="transfers-container">
+                        <div class="transfers-list" id="transfersList">
+                            <div class="empty-state">
+                                <i class="fas fa-exchange-alt"></i>
+                                <p>No transfers available</p>
+                            </div>
+                        </div>
+                        <div id="transfers-pagination" style="display: none;"></div>
+                    </div>
+                </div>
+
+
+                <div id="settings" class="tab-pane">
+                    <div class="tab-header">
+                        <h2>Settings</h2>
+                        <div class="tab-actions">
+                            <button class="btn btn-primary" id="saveSettingsBtn">
+                                <i class="fas fa-save"></i>
+                                Save
+                            </button>
+                            <button class="btn btn-secondary" id="resetSettingsBtn">
+                                <i class="fas fa-undo"></i>
+                                Reset
+                            </button>
+                            <span id="unsavedBadge" style="display:none; margin-left: 8px; padding: 2px 8px; border-radius: 12px; background: #fff3cd; color: #8a6d3b; font-size: 0.85rem;">Unsaved changes</span>
+                        </div>
+                    </div>
+                    <div class="settings-container">
+                        <div class="settings-section">
+                            <h3>General Settings</h3>
+                            <div class="setting-item" id="startOnBootSetting">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="startWithWindows">
+                                    Start on Boot
+                                </label>
+                                <div class="setting-info" id="startupInfo" style="font-size: 0.85rem; color: #666; margin-top: 0.25rem;">
+                                    <i class="fas fa-info-circle"></i>
+                                    <span id="startupType">Checking installation type...</span>
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="minimizeToTray">
+                                    Minimize to System Tray
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="showTrayNotifications">
+                                    Show Tray Notifications
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3>Sync Settings</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="autoSyncEnabled">
+                                    Enable Auto-sync
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Auto-sync interval:</label>
+                                <select id="autoSyncInterval" class="setting-select">
+                                    <option value="5">5 minutes</option>
+                                    <option value="15">15 minutes</option>
+                                    <option value="30" selected>30 minutes</option>
+                                    <option value="60">1 hour</option>
+                                    <option value="0">Manual</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Max concurrent transfers:</label>
+                                <select id="maxTransfers" class="setting-select">
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="3" selected>3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3>Folder Selection</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">Select Root Folders to Sync:</label>
+                                <div class="folder-selection-buttons">
+                                    <button class="btn btn-secondary" id="refreshFoldersBtn">
+                                        <i class="fas fa-sync-alt"></i> Refresh Folders
+                                    </button>
+                                    <button class="btn btn-secondary" id="selectAllFoldersBtn">
+                                        <i class="fas fa-check-square"></i> Select All
+                                    </button>
+                                    <button class="btn btn-secondary" id="deselectAllFoldersBtn">
+                                        <i class="fas fa-square"></i> Deselect All
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <div id="folderSelectionContainer" style="max-height: 300px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem; background: #f8f9fa;">
+                                    <div class="loading">
+                                        <div class="spinner"></div>
+                                        <p>Loading available folders...</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Selected Folders:</label>
+                                <span id="selectedFoldersCount" style="color: #666; font-size: 0.9rem;">0 folders selected</span>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3>Storage Settings</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">Storage Path:</label>
+                                <div style="display: flex; gap: 0.5rem; align-items: center; flex: 1;">
+                                    <input type="text" id="storagePath" class="setting-input" placeholder="Storage directory path" readonly>
+                                    <button class="btn btn-secondary" id="changeStoragePathBtn" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-folder-open"></i> Change
+                                    </button>
+                                    <button class="btn btn-secondary" id="resetStoragePathBtn" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-undo"></i> Reset
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Current Location:</label>
+                                <span id="currentStorageLocation" style="color: #666; font-size: 0.9rem;">Loading...</span>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Installation Type:</label>
+                                <span id="installationType" style="color: #666; font-size: 0.9rem;">Loading...</span>
+                            </div>
+
+                        </div>
+
+                        <div class="settings-section">
+                            <h3>Advanced Settings</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">Server URL:</label>
+                                <input type="text" id="serverUrl" class="setting-input" placeholder="https://m.juicewrldapi.com" value="https://m.juicewrldapi.com">
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Log level:</label>
+                                <select id="logLevel" class="setting-select">
+                                    <option value="debug">Debug</option>
+                                    <option value="info" selected>Info</option>
+                                    <option value="warning">Warning</option>
+                                    <option value="error">Error</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Settings Backup:</label>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <button class="btn btn-secondary" id="exportSettingsBtn" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-download"></i> Export
+                                    </button>
+                                    <button class="btn btn-secondary" id="importSettingsBtn" style="padding: 0.5rem 1rem;">
+                                        <i class="fas fa-upload"></i> Import
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="account" class="tab-pane">
+                    <div class="tab-header">
+                        <h2><i class="fas fa-user"></i> Account Management</h2>
+                        <div class="tab-actions" id="accountActions" style="display: none;">
+                            <button class="btn btn-danger" id="logoutBtn">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="account-container">
+                        <div id="accountNotAuth" class="account-section">
+                            <div class="auth-welcome">
+                                <i class="fas fa-user-circle" style="font-size: 4rem; color: #666; margin-bottom: 1rem;"></i>
+                                <h3>Welcome to JuiceWRLD API</h3>
+                                <p>Create a new account or connect to an existing one</p>
+                            </div>
+
+                            <div class="auth-options">
+                                <div class="auth-option-card">
+                                    <div class="auth-option-header">
+                                        <i class="fas fa-user-plus"></i>
+                                        <h3>Create New Account</h3>
+                                    </div>
+                                    <p>Start fresh with a new account on the master server</p>
+                                    <form id="createAccountForm" class="auth-form">
+                                        <div class="form-group">
+                                            <label for="newUsername">Username</label>
+                                            <input type="text" id="newUsername" class="form-input" placeholder="Enter username" required minlength="3" maxlength="30">
+                                            <small class="form-hint">3-30 characters, letters, numbers, underscores only</small>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="newDeviceName">Device Name (Optional)</label>
+                                            <input type="text" id="newDeviceName" class="form-input" placeholder="My Desktop">
+                                        </div>
+                                        <button type="submit" class="btn btn-primary btn-block">
+                                            <i class="fas fa-user-plus"></i> Create Account
+                                        </button>
+                                    </form>
+                                </div>
+
+                                <div class="auth-divider">
+                                    <span>OR</span>
+                                </div>
+
+                                <div class="auth-option-card">
+                                    <div class="auth-option-header">
+                                        <i class="fas fa-link"></i>
+                                        <h3>Connect Existing Account</h3>
+                                    </div>
+                                    <p>Use a pairing code to connect this device to your existing account</p>
+                                    <form id="pairDeviceForm" class="auth-form">
+                                        <div class="form-group">
+                                            <label for="pairingCode">Pairing Code</label>
+                                            <input type="text" id="pairingCode" class="form-input" placeholder="Enter pairing code" required pattern="[A-Z0-9_\-]{1,8}" maxlength="8" style="text-transform: uppercase;">
+                                            <small class="form-hint">Enter the code from another device (up to 8 characters)</small>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="pairDeviceName">Device Name (Optional)</label>
+                                            <input type="text" id="pairDeviceName" class="form-input" placeholder="My Desktop">
+                                        </div>
+                                        <button type="submit" class="btn btn-primary btn-block">
+                                            <i class="fas fa-link"></i> Connect Device
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="accountAuth" class="account-section" style="display: none;">
+                            <div class="account-info-card">
+                                <div class="account-header">
+                                    <div class="account-avatar">
+                                        <i class="fas fa-user-circle"></i>
+                                    </div>
+                                    <div class="account-details">
+                                        <h3 id="accountUsername">Loading...</h3>
+                                        <span class="account-status"><i class="fas fa-check-circle"></i> Connected</span>
+                                    </div>
+                                </div>
+
+                                <div class="account-stats">
+                                    <div class="stat-card">
+                                        <div class="stat-icon"><i class="fas fa-laptop"></i></div>
+                                        <div class="stat-info">
+                                            <label>Device ID</label>
+                                            <span id="accountDeviceId">-</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-icon"><i class="fas fa-shield-alt"></i></div>
+                                        <div class="stat-info">
+                                            <label>Role</label>
+                                            <span id="accountRole">-</span>
+                                        </div>
+                                    </div>
+                                    <div class="stat-card">
+                                        <div class="stat-icon"><i class="fas fa-clock"></i></div>
+                                        <div class="stat-info">
+                                            <label>Member Since</label>
+                                            <span id="accountCreated">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div id="accountOwnerSection" style="display: none;">
+                                    <div class="account-section-header">
+                                        <h4><i class="fas fa-key"></i> Device Pairing</h4>
+                                        <p>Generate a pairing code to connect other devices to your account</p>
+                                    </div>
+                                    
+                                    <div class="pairing-code-section">
+                                        <div id="pairingCodeDisplay" style="display: none;">
+                                            <div class="pairing-code-box">
+                                                <label>Your Pairing Code</label>
+                                                <div class="pairing-code" id="generatedPairingCode">------</div>
+                                                <small class="pairing-code-expires">Expires in: <span id="pairingCodeTimer">-</span></small>
+                                            </div>
+                                            <button class="btn btn-secondary" id="copyPairingCodeBtn">
+                                                <i class="fas fa-copy"></i> Copy Code
+                                            </button>
+                                        </div>
+                                        
+                                        <button class="btn btn-primary" id="generatePairingCodeBtn">
+                                            <i class="fas fa-key"></i> Generate Pairing Code
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="account-actions">
+                                    <button class="btn btn-secondary" id="refreshAccountBtn">
+                                        <i class="fas fa-sync-alt"></i> Refresh Status
+                                    </button>
+                                    <button class="btn btn-danger" id="revokeDeviceBtn">
+                                        <i class="fas fa-trash"></i> Remove This Device
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="accountLoading" class="account-section" style="display: none;">
+                            <div class="loading">
+                                <div class="spinner"></div>
+                                <p>Checking authentication status...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="status-bar">
+            <div class="status-content">
+                <span class="status-text" id="statusText">Ready</span>
+                <div class="status-indicators">
+                    <span class="status-indicator" id="connectionStatus">
+                        <i class="fas fa-question-circle"></i>
+                        Checking...
+                    </span>
+                    <span class="status-indicator" id="lastUpdate">
+                        <i class="fas fa-clock"></i>
+                        Last update: Never
+                    </span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

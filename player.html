@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player - JuiceWRLD API</title>
+    <link rel="stylesheet" href="player.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="player-app">
+        <div class="titlebar" style="-webkit-app-region: drag; display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background:#111214; color:#fff; height:36px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <img src="assets/icon_32x32.png" alt="" style="width:16px;height:16px; -webkit-app-region: no-drag;">
+                <span style="font-size:12px; opacity:.9;">Player - JuiceWRLD API</span>
+            </div>
+            <div style="display:flex; gap:6px; -webkit-app-region: no-drag;">
+                <button id="tbMin" class="tb-btn" title="Minimize">—</button>
+                <button id="tbMax" class="tb-btn" title="Maximize">▢</button>
+                <button id="tbClose" class="tb-btn close" title="Close">✕</button>
+            </div>
+        </div>
+        <aside class="sidebar">
+            <div class="brand" onclick="window.electronAPI.openMainUI()">
+                <img src="assets/icon_128x128.png" alt="Logo">
+                <span>Library</span>
+            </div>
+            <nav class="nav">
+                <button class="nav-btn" data-view="home"><i class="fas fa-home"></i> Home</button>
+                <button class="nav-btn active" data-view="music"><i class="fas fa-music"></i> Music</button>
+                <button class="nav-btn" data-view="videos"><i class="fas fa-film"></i> Videos</button>
+                <button class="nav-btn" data-view="albums"><i class="fas fa-compact-disc"></i> Albums</button>
+                <button class="nav-btn" data-view="playlists"><i class="fas fa-list"></i> Playlists</button>
+                <button class="nav-btn" data-view="artists"><i class="fas fa-user"></i> Artists</button>
+                <button class="nav-btn" data-view="folders"><i class="fas fa-folder"></i> Folders</button>
+            </nav>
+        </aside>
+        <main class="content">
+            <header class="topbar">
+                <div class="search">
+                    <i class="fas fa-search"></i>
+                    <input id="searchInput" type="text" placeholder="Search in your library">
+                </div>
+                <div class="actions">
+                    <button id="backToApp" class="btn" title="Back to App"><i class="fas fa-arrow-left"></i></button>
+                </div>
+            </header>
+
+            <section class="library" id="library"></section>
+            <div id="videoContainer" class="video-container hidden"></div>
+            <div id="videoPip" class="video-pip hidden">
+                <div class="pip-header">
+                    <span class="pip-title">Now Playing</span>
+                    <div class="pip-controls">
+                        <button id="pipClose" class="pip-btn" title="Close"><i class="fas fa-times"></i></button>
+                        <button id="pipExpand" class="pip-btn" title="Expand"><i class="fas fa-expand"></i></button>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <footer class="player-bar">
+            <div class="track-info">
+                <img id="artwork" src="assets/icon_128x128.png" alt="art">
+                <div>
+                    <div id="trackTitle" class="title">—</div>
+                    <div id="trackSubtitle" class="subtitle">—</div>
+                </div>
+            </div>
+            <div class="controls">
+                <button id="prevBtn" class="icon"><i class="fas fa-backward"></i></button>
+                <button id="playPauseBtn" class="icon primary"><i class="fas fa-play"></i></button>
+                <button id="nextBtn" class="icon"><i class="fas fa-forward"></i></button>
+                <div class="seek">
+                    <span id="currentTime">0:00</span>
+                    <input id="seekBar" type="range" min="0" max="100" value="0">
+                    <span id="duration">0:00</span>
+                </div>
+            </div>
+            <div class="volume">
+                <i class="fas fa-volume-up"></i>
+                <input id="volumeBar" type="range" min="0" max="1" step="0.01" value="1">
+                <button id="historyBtn" class="icon" title="History"><i class="fas fa-history"></i></button>
+                <button id="queueBtn" class="icon primary" title="Queue"><i class="fas fa-list"></i></button>
+            </div>
+        </footer>
+
+        <audio id="audio" preload="metadata"></audio>
+        <video id="video" class="hidden" preload="metadata"></video>
+    </div>
+
+    <div id="modalOverlay" class="modal-overlay">
+        <div class="modal">
+            <h4 id="modalTitle">Replace Queue?</h4>
+            <p id="modalMessage">This will clear the current queue and start a new one. Continue?</p>
+            <div class="modal-actions">
+                <button id="modalCancel" class="btn">Cancel</button>
+                <button id="modalConfirm" class="btn danger">Replace</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="player.js"></script>
+</body>
+</html>
+
+
