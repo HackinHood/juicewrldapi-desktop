@@ -1827,6 +1827,10 @@ function applySearch(){
 }
 
 function init(){
+  try{
+    const isMac = /Mac/i.test(navigator.platform) || /Mac OS X/i.test(navigator.userAgent)
+    document.body.classList.toggle('is-mac', !!isMac)
+  }catch(_){ }
   els.backToApp.onclick = async ()=>{
     try{
       const hasCurrent = currentIndex>=0 && currentIndex<queue.length

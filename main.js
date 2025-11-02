@@ -411,6 +411,7 @@ let fileStatsCache = new Map();
 let bgSyncWorker = null;
 let syncWindow = null;
 let activeTransfers = new Map();
+let metadataWriteQueue = Promise.resolve();
 
 function startBackgroundSyncWorker() {
   try {
@@ -959,9 +960,38 @@ function tryGenerateAudioThumbnail(localPath, mtimeMs, tags) {
   } catch (_) { return false; }
 }
 
+function resolveBundledFfmpegPath() {
+  try {
+    try {
+      const ff = require('ffmpeg-static');
+      if (ff && typeof ff === 'string' && fs.existsSync(ff)) return ff;
+    } catch (_) {}
+    const candidates = [];
+    const res = process.resourcesPath || __dirname;
+    if (process.platform === 'win32') {
+      candidates.push(path.join(res, 'ffmpeg.exe'));
+      candidates.push(path.join(res, 'bin', 'ffmpeg.exe'));
+      candidates.push(path.join(res, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'));
+      candidates.push(path.join(__dirname, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'));
+    } else if (process.platform === 'darwin' || process.platform === 'linux') {
+      candidates.push(path.join(res, 'ffmpeg'));
+      candidates.push(path.join(res, 'bin', 'ffmpeg'));
+      candidates.push(path.join(res, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg'));
+      candidates.push(path.join(__dirname, 'node_modules', 'ffmpeg-static', 'ffmpeg'));
+    }
+    for (const c of candidates) { if (fs.existsSync(c)) return c; }
+  } catch (_) {}
+  return null;
+}
+
 function isFfmpegAvailable() {
   try {
     const cp = require('child_process');
+    const bundled = resolveBundledFfmpegPath();
+    if (bundled) {
+      const out = cp.spawnSync(bundled, ['-version'], { stdio: 'ignore' });
+      if (out && out.status === 0) return true;
+    }
     const out = cp.spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
     return out && out.status === 0;
   } catch (_) { return false; }
@@ -971,12 +1001,13 @@ async function tryGenerateVideoThumbnail(localPath, mtimeMs) {
   try {
     if (!isFfmpegAvailable()) return false;
     const { spawn } = require('child_process');
+    const ffmpegBin = resolveBundledFfmpegPath() || 'ffmpeg';
     const target = getThumbnailCacheFile(localPath, mtimeMs, '.jpg');
     if (!target) return false;
     const args = ['-y', '-ss', '00:00:01', '-i', localPath, '-frames:v', '1', '-vf', 'scale=320:-1', target];
     return await new Promise((resolve) => {
       try {
-        const p = spawn('ffmpeg', args, { windowsHide: true });
+        const p = spawn(ffmpegBin, args, { windowsHide: true });
         p.on('error', () => resolve(false));
         p.on('exit', (code) => resolve(code === 0 && fs.existsSync(target)));
       } catch (_) { resolve(false); }
@@ -2033,83 +2064,80 @@ ipcMain.handle('download-file-to-local', async (event, filepath, serverUrl, serv
         });
 
         fileStream.on('finish', () => {
-          const isUpdate = metadata.files[filepath];
-          let sizeDifference = 0;
-          if (isUpdate) {
-            sizeDifference = downloadedBytes - (isUpdate.size || 0);
-          }
           let fileHash = null;
           try { fileHash = hasher.digest('hex'); } catch (_) { fileHash = null; }
-
-          metadata.files[filepath] = {
-            filename: path.basename(filepath),
-            filepath: filepath,
-            localPath: localPath,
-            downloadedAt: new Date().toISOString(),
-            size: downloadedBytes,
-            serverUrl: serverUrl,
-            hash: fileHash,
-            mtimeMs: (function(){ try { const st = fs.statSync(localPath); return st && st.mtimeMs ? Math.floor(st.mtimeMs) : null; } catch(_) { return null; } })()
-          };
-          
-          fileStatsCache.delete(localPath);
-
-          if (isUpdate) {
-            metadata.totalSize += sizeDifference;
-          } else {
-            metadata.totalSize += downloadedBytes;
-          }
-
-          if (saveLocalMetadata(metadata)) {
-            activeTransfers.delete(filepath)
-            const wins3 = BrowserWindow.getAllWindows()
-            for (const win of wins3) { try { win.webContents.send('transfer-complete', { filepath, size: downloadedBytes }); } catch(_) {} }
-            ;(async()=>{
-              try {
-                let tags = null;
-                const lower = (localPath || '').toLowerCase();
-                const isVideo = ['.mp4','.webm','.mkv','.mov','.avi','.m4v'].some(ext => lower.endsWith(ext));
-                if (!isVideo) {
-                  try {
-                    const mmModule = await import('music-metadata');
-                    const mm = (mmModule && mmModule.parseFile) ? mmModule : (mmModule && mmModule.default ? mmModule.default : null);
-                    if (mm && typeof mm.parseFile === 'function') {
-                      const t = await mm.parseFile(localPath);
-                      tags = { artist: t.common.artist||null, title: t.common.title||null, album: t.common.album||null, albumArtist: t.common.albumartist||null, year: t.common.year||null, genre: t.common.genre ? t.common.genre.join(', ') : null, track: t.common.track ? t.common.track.no : null };
-                      if (t.common.picture && t.common.picture.length>0) {
-                        const p = t.common.picture[0];
-                        try { const b64 = Buffer.from(p.data).toString('base64'); const mime = (p.format && /^image\//.test(p.format)) ? p.format : 'image/jpeg'; tags.albumArt = `data:${mime};base64,${b64}`; } catch(_) {}
-                      }
-                    }
-                  } catch(_) {}
-                }
-                const statsNow = (function(){ try { const st = fs.statSync(localPath); return st && st.mtimeMs ? Math.floor(st.mtimeMs) : null; } catch(_) { return null; } })();
-                if (tags) {
-                  const entry = metadata.files[filepath] || {};
-                  if (tags.title && (!entry.displayTitle || entry.displayTitle !== tags.title)) entry.displayTitle = tags.title;
-                  if (tags.artist && (!entry.displayArtist || entry.displayArtist !== tags.artist)) entry.displayArtist = tags.artist;
-                  if (tags.album && (!entry.displayAlbum || entry.displayAlbum !== tags.album)) entry.displayAlbum = tags.album;
-                  metadata.files[filepath] = entry;
-                  saveLocalMetadata(metadata);
-                  tryGenerateAudioThumbnail(localPath, statsNow, tags || {});
-                } else if (isVideo) {
-                  await tryGenerateVideoThumbnail(localPath, statsNow);
-                }
-              } catch(_) {}
-            })()
-            resolve({
-              success: true,
-              message: isUpdate ? 'File updated successfully' : 'File downloaded successfully',
+          metadataWriteQueue = metadataWriteQueue.then(async () => {
+            const m = loadLocalMetadata();
+            const prev = m.files[filepath];
+            const isUpdate = Boolean(prev);
+            let sizeDifference = 0;
+            if (isUpdate) sizeDifference = downloadedBytes - (prev.size || 0);
+            m.files[filepath] = {
+              filename: path.basename(filepath),
+              filepath: filepath,
               localPath: localPath,
+              downloadedAt: new Date().toISOString(),
               size: downloadedBytes,
-              alreadyExists: false,
-              wasUpdate: isUpdate,
-              sizeDifference: sizeDifference
-            });
-          } else {
-            if (mainWindow) { try { mainWindow.webContents.send('transfer-error', { filepath, error: 'Failed to save metadata' }); } catch(_) {} }
-            resolve({ success: false, error: 'Failed to save metadata' });
-          }
+              serverUrl: serverUrl,
+              hash: fileHash,
+              mtimeMs: (function(){ try { const st = fs.statSync(localPath); return st && st.mtimeMs ? Math.floor(st.mtimeMs) : null; } catch(_) { return null; } })()
+            };
+            fileStatsCache.delete(localPath);
+            if (isUpdate) m.totalSize += sizeDifference; else m.totalSize += downloadedBytes;
+            if (saveLocalMetadata(m)) {
+              activeTransfers.delete(filepath)
+              const wins3 = BrowserWindow.getAllWindows()
+              for (const win of wins3) { try { win.webContents.send('transfer-complete', { filepath, size: downloadedBytes }); } catch(_) {} }
+              ;(async()=>{
+                try {
+                  let tags = null;
+                  const lower = (localPath || '').toLowerCase();
+                  const isVideo = ['.mp4','.webm','.mkv','.mov','.avi','.m4v'].some(ext => lower.endsWith(ext));
+                  if (!isVideo) {
+                    try {
+                      const mmModule = await import('music-metadata');
+                      const mm = (mmModule && mmModule.parseFile) ? mmModule : (mmModule && mmModule.default ? mmModule.default : null);
+                      if (mm && typeof mm.parseFile === 'function') {
+                        const t = await mm.parseFile(localPath);
+                        tags = { artist: t.common.artist||null, title: t.common.title||null, album: t.common.album||null, albumArtist: t.common.albumartist||null, year: t.common.year||null, genre: t.common.genre ? t.common.genre.join(', ') : null, track: t.common.track ? t.common.track.no : null };
+                        if (t.common.picture && t.common.picture.length>0) {
+                          const p = t.common.picture[0];
+                          try { const b64 = Buffer.from(p.data).toString('base64'); const mime = (p.format && /^image\//.test(p.format)) ? p.format : 'image/jpeg'; tags.albumArt = `data:${mime};base64,${b64}`; } catch(_) {}
+                        }
+                      }
+                    } catch(_) {}
+                  }
+                  const statsNow = (function(){ try { const st = fs.statSync(localPath); return st && st.mtimeMs ? Math.floor(st.mtimeMs) : null; } catch(_) { return null; } })();
+                  if (tags) {
+                    metadataWriteQueue = metadataWriteQueue.then(async () => {
+                      const m2 = loadLocalMetadata();
+                      const entry = m2.files[filepath] || {};
+                      if (tags.title && (!entry.displayTitle || entry.displayTitle !== tags.title)) entry.displayTitle = tags.title;
+                      if (tags.artist && (!entry.displayArtist || entry.displayArtist !== tags.artist)) entry.displayArtist = tags.artist;
+                      if (tags.album && (!entry.displayAlbum || entry.displayAlbum !== tags.album)) entry.displayAlbum = tags.album;
+                      m2.files[filepath] = entry;
+                      saveLocalMetadata(m2);
+                    });
+                    tryGenerateAudioThumbnail(localPath, statsNow, tags || {});
+                  } else if (isVideo) {
+                    await tryGenerateVideoThumbnail(localPath, statsNow);
+                  }
+                } catch(_) {}
+              })()
+              resolve({
+                success: true,
+                message: isUpdate ? 'File updated successfully' : 'File downloaded successfully',
+                localPath: localPath,
+                size: downloadedBytes,
+                alreadyExists: false,
+                wasUpdate: isUpdate,
+                sizeDifference: sizeDifference
+              });
+            } else {
+              if (mainWindow) { try { mainWindow.webContents.send('transfer-error', { filepath, error: 'Failed to save metadata' }); } catch(_) {} }
+              resolve({ success: false, error: 'Failed to save metadata' });
+            }
+          });
         });
 
         fileStream.on('error', () => {

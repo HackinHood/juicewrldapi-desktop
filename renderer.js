@@ -2955,20 +2955,25 @@ async function* runSyncWorker() {
         let skippedCount = 0;
         let updatedCount = 0;
         const serverUrl = currentSettings.serverUrl || 'http://localhost:8000';
+        const maxConcurrent = Math.max(1, parseInt((currentSettings && currentSettings.maxTransfers) || 3) || 3);
         let maxPasses = 5;
         while (true) {
             const totalFiles = files.length;
             if (totalFiles === 0) break;
-            const batchSize = 3;
             let passDownloaded = 0;
             let passFailed = 0;
             let passSkipped = 0;
             let passUpdated = 0;
-            for (let i = 0; i < totalFiles; i += batchSize) {
-                if (syncCancelled) return;
-                const batch = files.slice(i, i + batchSize);
-                const batchStart = i;
-                const batchPromises = batch.map(async (file, batchIndex) => {
+            let processed = 0;
+            let index = 0;
+            let active = [];
+            let taskSeq = 0;
+
+            const startNext = () => {
+                if (index >= totalFiles || syncCancelled) return;
+                const file = files[index++];
+                const id = taskSeq++;
+                const p = (async () => {
                     if (syncCancelled) return;
                     const fileName = file.filename || file.name || file.filepath || 'Unknown';
                     try {
@@ -2977,7 +2982,7 @@ async function* runSyncWorker() {
                             serverUrl,
                             useDirectPaths ? null : files
                         );
-                        if (result.success) {
+                        if (result && result.success) {
                             if (result.alreadyExists) {
                                 if (result.upToDate) { passSkipped++; skippedCount++; } else { passUpdated++; updatedCount++; }
                             } else {
@@ -2985,18 +2990,30 @@ async function* runSyncWorker() {
                             }
                         } else {
                             passFailed++; failedCount++;
-                            console.error(`[Sync] Failed to download: ${fileName} - ${result.error}`);
+                            console.error(`[Sync] Failed to download: ${fileName} - ${result ? result.error : 'Unknown error'}`);
                         }
                     } catch (error) {
                         passFailed++; failedCount++;
                         console.error(`[Sync] Error downloading file ${fileName}:`, error);
                     }
-                });
-                await Promise.all(batchPromises);
-                const processed = Math.min(batchStart + batch.length, totalFiles);
+                    return id;
+                })().catch(() => id);
+                active.push({ id, p });
+            };
+
+            while (active.length < maxConcurrent && index < totalFiles && !syncCancelled) startNext();
+
+            while (active.length > 0) {
+                if (syncCancelled) return;
+                try {
+                    const finishedId = await Promise.race(active.map(a => a.p));
+                    active = active.filter(a => a.id !== finishedId);
+                } catch (_) {}
+                processed += 1;
                 const progress = Math.round((processed / totalFiles) * 80) + 15;
                 yield { type: 'progress', message: `Syncing... ${processed}/${totalFiles} files`, progress, downloaded: passDownloaded, updated: passUpdated, skipped: passSkipped, errors: passFailed, deleted: deletedCount, total: totalFiles };
                 await new Promise(resolve => setTimeout(resolve, 50));
+                while (active.length < maxConcurrent && index < totalFiles && !syncCancelled) startNext();
             }
             if (useDirectPaths) break;
             if (--maxPasses <= 0) break;
