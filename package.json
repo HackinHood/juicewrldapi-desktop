@@ -119,7 +119,11 @@
       }
     },
     "dmg": {
-      "icon": "build/icon-mac.icns"
+      "icon": "build/icon-mac.icns",
+      "sign": false,
+      "format": "ULFO",
+      "internetEnabled": false,
+      "title": "${productName}-${version}-${arch}"
     },
     "linux": {
       "icon": "assets/icon_512x512.png",
@@ -135,7 +139,7 @@
       "installerHeader": "build/icon.ico",
       "installerSidebar": "build/icon.ico"
     },
-    "artifactName": "${productName}-${version}.${ext}",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "compression": "maximum",
     "forceCodeSigning": false,
     "removePackageScripts": false,

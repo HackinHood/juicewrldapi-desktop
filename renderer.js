@@ -2074,11 +2074,6 @@ async function loadStartupStatus() {
             }
         }
         
-        if (startupInfo.startWithWindows !== undefined) {
-            elements.startWithWindows.checked = startupInfo.startWithWindows;
-            currentSettings.startWithWindows = startupInfo.startWithWindows;
-        }
-        
         console.log('[Startup] Startup status loaded:', startupInfo);
         
     } catch (error) {
