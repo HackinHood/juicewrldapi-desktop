@@ -377,7 +377,7 @@ function createOptimizedTrayIcon() {
       const trayIcon = icon.resize({ 
         width: 16, 
         height: 16,
-        quality: 'best' // Use best quality for resizing
+        quality: 'best'
       });
       
       console.log('[Tray Icon] Created optimized 16x16 tray icon');
@@ -387,7 +387,7 @@ function createOptimizedTrayIcon() {
     if (process.platform === 'darwin') {
       const size = icon.getSize();
       console.log(`[Tray Icon] Original mac icon size: ${size.width}x${size.height}`);
-      const target = 22; // recommended logical size for macOS status bar
+      const target = 22;
       const trayIcon = icon.resize({ width: target, height: target, quality: 'best' });
       try { trayIcon.setTemplateImage(true); } catch (_) {}
       console.log('[Tray Icon] Created mac template tray icon');
@@ -2650,6 +2650,25 @@ ipcMain.handle('get-play-history', async () => {
   }
 });
 
+ipcMain.handle('get-favorites', async () => {
+  try {
+    const favorites = store.get('favorites', []);
+    return { success: true, favorites };
+  } catch (error) {
+    return { success: false, error: error.message, favorites: [] };
+  }
+});
+
+ipcMain.handle('save-favorites', async (event, favorites) => {
+  try {
+    const list = Array.isArray(favorites) ? favorites : [];
+    store.set('favorites', list);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('get-thumbnail-path', async (event, localPath, mtimeMs) => {
   try {
     if (typeof localPath !== 'string' || !localPath) return null;
@@ -2700,6 +2719,31 @@ ipcMain.handle('save-thumbnail', async (event, localPath, mtimeMs, dataUrl) => {
     }
   } catch (e) {
     return { success: false, error: e && e.message ? e.message : 'error' };
+  }
+});
+
+ipcMain.handle('generate-video-thumbnail', async (event, localPath, mtimeMs) => {
+  try {
+    const ok = await tryGenerateVideoThumbnail(localPath, mtimeMs);
+    if (!ok) return { success: false };
+    const target = getThumbnailCacheFile(localPath, mtimeMs, '.jpg');
+    if (target && fs.existsSync(target)) {
+      try { const { pathToFileURL } = require('url'); return { success: true, url: pathToFileURL(target).href, path: target }; } catch (_) { return { success: true, url: target, path: target }; }
+    }
+    const crypto = require('crypto');
+    const key = `${localPath}:${mtimeMs || 'na'}`;
+    const name = crypto.createHash('md5').update(key).digest('hex');
+    const dir = getThumbnailsPath();
+    const exts = ['.jpg','.jpeg','.png'];
+    for (const ext of exts) {
+      const p = path.join(dir, name + ext);
+      if (fs.existsSync(p)) {
+        try { const { pathToFileURL } = require('url'); return { success: true, url: pathToFileURL(p).href, path: p }; } catch (_) { return { success: true, url: p, path: p }; }
+      }
+    }
+    return { success: false };
+  } catch (_) {
+    return { success: false };
   }
 });
 

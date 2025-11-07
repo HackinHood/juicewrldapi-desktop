@@ -101,6 +101,8 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:#121212;
 .volume #queueBtn:hover{background:#1ed760;border-color:#1ed760}
 .hidden{display:none}
 
+.icon.favorited i{color:#FFD700}
+
 .video-container {
     position: fixed;
     top: 36px;
@@ -208,6 +210,10 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:#121212;
 .volume input{width:clamp(80px,18vw,160px)}
 .player-bar .title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .player-bar .subtitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.fav-toggle{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);border:1px solid #333;color:#ddd;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.fav-toggle:hover{background:rgba(0,0,0,.75)}
+.fav-toggle .fa-star{color:#FFD700}
 
 @media (max-width: 1200px){
   .controls{grid-template-columns:auto auto auto minmax(120px,1fr)}

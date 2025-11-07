@@ -36,6 +36,7 @@ let collectionsRebuildTimer = null
 let collectionsCacheKey = null
 let nowPlayingUpdateInterval = null
 let authState = null
+let favorites = new Set()
 
 function computeCollectionsCacheKey(){
   let maxM = 0
@@ -112,7 +113,8 @@ const els = {
   seek: document.getElementById('seekBar'),
   currentTime: document.getElementById('currentTime'),
   duration: document.getElementById('duration'),
-  volume: document.getElementById('volumeBar')
+  volume: document.getElementById('volumeBar'),
+  favoriteBtn: document.getElementById('favoriteBtn')
 }
 
 function formatTime(sec){
@@ -342,7 +344,7 @@ function updateExistingCards(){
     }
     
     let updated = 0
-    const maxUpdates = 20 // Limit updates per frame to prevent blocking
+    const maxUpdates = 20
     
     for(const card of cachedCards){
       if(updated >= maxUpdates) break
@@ -400,7 +402,7 @@ function setNavActive(key){
 function render(){
   setNavActive(currentView)
   inDetailView = false
-  cachedCards = null // Clear cache on view change
+  cachedCards = null
   if(currentView==='home') return renderHome()
   if(currentView==='search') return renderSearch()
   if(currentView==='albums') return renderAlbums()
@@ -409,6 +411,7 @@ function render(){
   if(currentView==='folders') return renderFolders()
   if(currentView==='music') return renderMusic()
   if(currentView==='videos') return renderVideos()
+  if(currentView==='favorites') return renderFavorites()
   return renderMusic()
 }
 
@@ -720,6 +723,7 @@ function buildCard(it, list, options){
   const placeIcon = ()=>{ thumb.innerHTML = it.isVideo?'<i class="fas fa-film"></i>':'<i class="fas fa-music"></i>' }
   placeIcon()
   
+  
   const updateThumbnail = () => {
     if(it.thumbnail && typeof it.thumbnail === 'string'){
       const currentImg = thumb.querySelector('img')
@@ -842,6 +846,7 @@ async function pumpEnhancers(){
             if(th){ 
               thumbCache.set(task.key, th)
               task.item.thumbnail = th
+              try{ if(currentIndex>=0 && queue[currentIndex] && queue[currentIndex].localPath===task.item.localPath){ updateNowPlaying(task.item) } }catch(_){ }
             }
           }catch(_){ }
         }
@@ -911,6 +916,10 @@ function extractThumbnail(filePath, isVideo, albumArtData = null, mtimeMs = null
       if(existing){ resolve(existing); return }
     }catch(_){ }
     if(isVideo){
+      try{
+        const gen = await window.electronAPI.generateVideoThumbnail(filePath, mtimeMs)
+        if(gen && gen.success && typeof gen.url === 'string' && gen.url){ resolve(gen.url); return }
+      }catch(_){ }
       const video = document.createElement('video')
       video.crossOrigin = 'anonymous'
       video.preload = 'metadata'
@@ -1125,6 +1134,10 @@ function renderSearch(){
 }
 
 function renderMusic(){ renderIncrementalGrid(libraryItems.filter(i=>i.isAudio), { playScope:'single' }) }
+function renderFavorites(){
+  const items = libraryItems.filter(i=>favorites.has(i.localPath))
+  renderIncrementalGrid(items, { playScope:'single' })
+}
 function renderVideos(){
   teardownVirtualizer()
   const videos = libraryItems.filter(i=>i.isVideo)
@@ -1331,6 +1344,20 @@ async function savePlaylists(){
   }
 }
 
+async function loadFavorites(){
+  try{
+    const r = await window.electronAPI.getFavorites()
+    const arr = r && Array.isArray(r.favorites) ? r.favorites : []
+    favorites = new Set(arr)
+  }catch(_){ }
+}
+
+async function saveFavorites(){
+  try{
+    await window.electronAPI.saveFavorites(Array.from(favorites))
+  }catch(_){ }
+}
+
 
 function updateNowPlaying(meta){
   els.title.textContent = meta?.title||'—'
@@ -1346,10 +1373,15 @@ function updateNowPlaying(meta){
   } else {
     els.artwork.src = 'assets/icon_128x128.png'
   }
+  try{ document.title = `${meta?.title||'Player'} - JuiceWRLD API` }catch(_){ }
+  try{ const t = document.querySelector('.titlebar-title'); if(t) t.textContent = `${meta?.title||'Player'} - JuiceWRLD API` }catch(_){ }
+  try{ setMediaSessionMetadata(meta) }catch(_){ }
+  try{ updateFavoriteBtnUI() }catch(_){ }
 }
 
 function setPlayingState(isPlaying){
   els.playPause.innerHTML = isPlaying?'<i class="fas fa-pause"></i>':'<i class="fas fa-play"></i>'
+  try{ updateMediaSessionState() }catch(_){ }
 }
 
 function clearPlaybar(){
@@ -1384,6 +1416,7 @@ function clearPlaybar(){
   stopNowPlayingUpdates()
   try{ window.electronAPI.discordClear() }catch(_){ }
   refreshQueuePanel()
+  try{ updateFavoriteBtnUI() }catch(_){ }
 }
 
 function getMedia(){
@@ -1417,7 +1450,7 @@ function switchElementVisibility(){
         els.video.style.width = '100%'
         els.video.style.height = 'calc(100% - 40px)'
         els.video.style.objectFit = 'cover'
-        els.video.classList.remove('hidden') // Make sure video is visible
+        els.video.classList.remove('hidden')
         els.videoPip.appendChild(els.video)
       }
     } else {
@@ -1428,7 +1461,7 @@ function switchElementVisibility(){
         els.video.style.width = '100%'
         els.video.style.height = '100%'
         els.video.style.objectFit = 'contain'
-        els.video.classList.remove('hidden') // Make sure video is visible
+        els.video.classList.remove('hidden')
         els.videoContainer.appendChild(els.video)
       }
     }
@@ -1627,6 +1660,76 @@ function stopNowPlayingUpdates(){
   try{ window.electronAPI.discordClear() }catch(_){ }
 }
 
+function setMediaSessionHandlers(){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    ms.setActionHandler('play', ()=>{ const m=getMedia(); if(m && m.paused) togglePlay() })
+    ms.setActionHandler('pause', ()=>{ const m=getMedia(); if(m && !m.paused) togglePlay() })
+    ms.setActionHandler('previoustrack', ()=>{ prev() })
+    ms.setActionHandler('nexttrack', ()=>{ next() })
+    ms.setActionHandler('seekbackward', (d)=>{ const m=getMedia(); if(!m) return; const sec = Math.max(0, (d && d.seekOffset ? d.seekOffset : 10)); m.currentTime = Math.max(0, (m.currentTime||0) - sec); intendedPosition = m.currentTime })
+    ms.setActionHandler('seekforward', (d)=>{ const m=getMedia(); if(!m) return; const sec = Math.max(0, (d && d.seekOffset ? d.seekOffset : 10)); const dur = m.duration||0; m.currentTime = Math.min(dur, (m.currentTime||0) + sec); intendedPosition = m.currentTime })
+    ms.setActionHandler('seekto', (d)=>{ const m=getMedia(); if(!m) return; if(d && typeof d.seekTime==='number'){ const dur = m.duration||0; const t = Math.max(0, Math.min(dur, d.seekTime)); m.currentTime = t; intendedPosition = t; updateMediaSessionState() } })
+  }catch(_){ }
+}
+
+async function setMediaSessionMetadata(meta){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const candidates = []
+    const addCandidate = (u)=>{ if(!u) return; if(candidates.indexOf(u)===-1) candidates.push(u) }
+    addCandidate(meta && typeof meta.thumbnail==='string' ? meta.thumbnail : null)
+    if(meta && (meta.path || meta.localPath)){
+      try{
+        let base = 'https://m.juicewrldapi.com'
+        try{ const s = await window.electronAPI.getSettings(); base = (s && s.serverUrl) ? String(s.serverUrl).trim() : base }catch(_){ }
+        if(base.endsWith('/')) base = base.slice(0,-1)
+        const p = meta.path || meta.localPath
+        const art = `${base}/album-art?filepath=${encodeURIComponent(p)}`
+        addCandidate(art)
+      }catch(_){ }
+    }
+    addCandidate('assets/icon_512x512.png')
+    const buildEntries = (u)=>{
+      const lower = String(u).toLowerCase()
+      const type = (lower.endsWith('.jpg')||lower.endsWith('.jpeg')) ? 'image/jpeg' : (lower.endsWith('.png') ? 'image/png' : 'image/jpeg')
+      return [
+        { src: u, sizes:'96x96', type },
+        { src: u, sizes:'128x128', type },
+        { src: u, sizes:'192x192', type },
+        { src: u, sizes:'256x256', type },
+        { src: u, sizes:'512x512', type }
+      ]
+    }
+    const artwork = candidates.flatMap(buildEntries)
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta?.title || 'Player',
+      artist: meta?.artist || '',
+      album: meta?.album || '',
+      artwork
+    })
+    setMediaSessionHandlers()
+    updateMediaSessionState()
+  }catch(_){ }
+}
+
+function updateMediaSessionState(){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const m = getMedia()
+    if(!m) return
+    navigator.mediaSession.playbackState = m.paused ? 'paused' : 'playing'
+    if(Number.isFinite(m.duration) && m.duration>0){
+      navigator.mediaSession.setPositionState({
+        duration: m.duration||0,
+        playbackRate: m.playbackRate||1,
+        position: Math.max(0, Number.isFinite(m.currentTime)?m.currentTime:0)
+      })
+    }
+  }catch(_){ }
+}
+
 async function playIndex(idx){
   if(idx<0||idx>=queue.length) return
   currentIndex = idx
@@ -1773,9 +1876,11 @@ function bindMediaEvents(media){
       els.seek.value = String((media.currentTime/media.duration)*100)
       intendedPosition = media.currentTime
     }
+    try{ updateMediaSessionState() }catch(_){ }
   })
   media.addEventListener('loadedmetadata',()=>{
     els.duration.textContent = formatTime(media.duration)
+    try{ updateMediaSessionState() }catch(_){ }
   })
   media.addEventListener('ended',()=>{ next() })
   media.addEventListener('error',()=>{ next() })
@@ -1862,12 +1967,24 @@ function init(){
   els.volume.oninput = onVolume
   els.volume.onchange = onVolume
   els.search.oninput = applySearch
+  if(els.favoriteBtn){
+    els.favoriteBtn.onclick = ()=>{
+      if(currentIndex>=0 && currentIndex<queue.length){
+        const it = queue[currentIndex]
+        const key = it.localPath
+        if(favorites.has(key)) favorites.delete(key); else favorites.add(key)
+        saveFavorites()
+        updateFavoriteBtnUI()
+        if(currentView==='favorites') render()
+      }
+    }
+  }
   bindMediaEvents(els.audio)
   bindMediaEvents(els.video)
   try{ 
     els.video.muted = false; 
     els.video.playsInline = true;
-    els.video.controls = false; // Hide default controls since we have custom ones
+    els.video.controls = false;
   }catch(_){ }
   
   if(els.pipClose) {
@@ -1987,6 +2104,7 @@ function init(){
   if(cls) cls.onclick = ()=> window.electronAPI.closeWindow()
 
   loadAuthState()
+  try{ loadFavorites().then(()=>{ try{ if(currentView==='favorites') render(); else scheduleCardUpdate() }catch(_){ } }) }catch(_){ }
   loadLibrary()
   mountQueueUI()
   try{
@@ -2000,6 +2118,17 @@ function init(){
     }
     settingsInit()
   }catch(_){ }
+  try{ updateFavoriteBtnUI() }catch(_){ }
+}
+
+function updateFavoriteBtnUI(){
+  if(!els.favoriteBtn) return
+  const icon = els.favoriteBtn.querySelector('i')
+  const it = (currentIndex>=0 && currentIndex<queue.length) ? queue[currentIndex] : null
+  const isFav = !!(it && favorites.has(it.localPath))
+  if(icon){ icon.className = isFav ? 'fas fa-star' : 'far fa-star' }
+  els.favoriteBtn.classList.toggle('favorited', isFav)
+  els.favoriteBtn.title = isFav ? 'Unfavorite' : 'Favorite'
 }
 
 function makePipDraggable() {
@@ -2415,6 +2544,15 @@ function openContextMenu(x, y, item, list){
   addNext.onclick = ()=>{ addNextInQueue(item); hideContextMenu() }
   const addEnd = document.createElement('button'); addEnd.textContent = 'Add to Queue'
   addEnd.onclick = ()=>{ queue.push(item); refreshQueuePanel(); hideContextMenu() }
+  const favBtn = document.createElement('button'); favBtn.textContent = favorites.has(item.localPath)?'Unfavorite':'Favorite'
+  favBtn.onclick = ()=>{
+    const key = item.localPath
+    if(favorites.has(key)) favorites.delete(key); else favorites.add(key)
+    saveFavorites()
+    hideContextMenu()
+    try{ updateFavoriteBtnUI() }catch(_){ }
+    if(currentView==='favorites') render()
+  }
   const addToPlaylist = document.createElement('button'); addToPlaylist.textContent = 'Add to Playlist'
   addToPlaylist.onclick = ()=>{
     hideContextMenu()
@@ -2454,6 +2592,7 @@ function openContextMenu(x, y, item, list){
     })
   }
   contextMenuEl.appendChild(addNext); contextMenuEl.appendChild(addEnd)
+  contextMenuEl.appendChild(favBtn)
   contextMenuEl.appendChild(addToPlaylist)
   contextMenuEl.style.left = x+'px'
   contextMenuEl.style.top = y+'px'

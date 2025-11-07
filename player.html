@@ -29,6 +29,7 @@
             <nav class="nav">
                 <button class="nav-btn" data-view="home"><i class="fas fa-home"></i> Home</button>
                 <button class="nav-btn active" data-view="music"><i class="fas fa-music"></i> Music</button>
+                <button class="nav-btn" data-view="favorites"><i class="fas fa-star"></i> Favorites</button>
                 <button class="nav-btn" data-view="videos"><i class="fas fa-film"></i> Videos</button>
                 <button class="nav-btn" data-view="albums"><i class="fas fa-compact-disc"></i> Albums</button>
                 <button class="nav-btn" data-view="playlists"><i class="fas fa-list"></i> Playlists</button>
@@ -80,6 +81,7 @@
             <div class="volume">
                 <i class="fas fa-volume-up"></i>
                 <input id="volumeBar" type="range" min="0" max="1" step="0.01" value="1">
+                <button id="favoriteBtn" class="icon" title="Favorite"><i class="far fa-star"></i></button>
                 <button id="historyBtn" class="icon" title="History"><i class="fas fa-history"></i></button>
                 <button id="queueBtn" class="icon primary" title="Queue"><i class="fas fa-list"></i></button>
             </div>

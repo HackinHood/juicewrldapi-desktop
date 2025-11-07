@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   savePlaylists: (playlists) => ipcRenderer.invoke('save-playlists', playlists),
   getPlaylists: () => ipcRenderer.invoke('get-playlists'),
+  getFavorites: () => ipcRenderer.invoke('get-favorites'),
+  saveFavorites: (favorites) => ipcRenderer.invoke('save-favorites', favorites),
   savePlayHistory: (history) => ipcRenderer.invoke('save-play-history', history),
   getPlayHistory: () => ipcRenderer.invoke('get-play-history'),
   getActiveTransfers: () => ipcRenderer.invoke('get-active-transfers'),
@@ -52,6 +54,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifySyncComplete: () => ipcRenderer.invoke('notify-sync-complete'),
   getThumbnailPath: (localPath, mtimeMs) => ipcRenderer.invoke('get-thumbnail-path', localPath, mtimeMs),
   saveThumbnail: (localPath, mtimeMs, dataUrl) => ipcRenderer.invoke('save-thumbnail', localPath, mtimeMs, dataUrl),
+  generateVideoThumbnail: (localPath, mtimeMs) => ipcRenderer.invoke('generate-video-thumbnail', localPath, mtimeMs),
   pathToFileURL: (p) => {
     try {
       const urlMod = require('url')
