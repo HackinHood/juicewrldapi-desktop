@@ -1339,6 +1339,7 @@ async function savePlaylists(){
     if(!result || !result.success) {
       console.error('[Playlists] Failed to save:', result?.error)
     }
+    try{ if(authState && authState.token){ await pushCollectionsToServer() } }catch(_){ }
   } catch (error) {
     console.error('[Playlists] Error saving playlists:', error)
   }
@@ -1355,6 +1356,105 @@ async function loadFavorites(){
 async function saveFavorites(){
   try{
     await window.electronAPI.saveFavorites(Array.from(favorites))
+    try{ if(authState && authState.token){ await pushCollectionsToServer() } }catch(_){ }
+  }catch(_){ }
+}
+
+function buildPathMaps(){
+  const byLocal = new Map()
+  const byPath = new Map()
+  for(const it of libraryItems){
+    if(it.localPath) byLocal.set(it.localPath, it.path || it.filepath || '')
+    if(it.path) byPath.set(it.path, it.localPath || '')
+  }
+  return { byLocal, byPath }
+}
+
+function favoritesToFilepaths(){
+  const out = []
+  for(const it of libraryItems){
+    const p = it.path || ''
+    const lp = it.localPath || ''
+    if((lp && favorites.has(lp)) || (p && favorites.has(p))){
+      if(p) out.push(p)
+    }
+  }
+  return Array.from(new Set(out))
+}
+
+function playlistsToServer(){
+  const out = []
+  for(const pl of (playlists||[])){
+    const items = Array.isArray(pl.items) ? pl.items : []
+    const fps = []
+    for(const it of items){
+      const p = it && (it.path || it.filepath) ? (it.path || it.filepath) : ''
+      if(p) fps.push(p)
+    }
+    out.push({ id: typeof pl.id==='number'?pl.id:undefined, name: String(pl.name||'').trim() || 'Untitled', items: Array.from(new Set(fps)) })
+  }
+  return out
+}
+
+function applyServerFavoritesToLocal(filepaths){
+  const byPath = new Map()
+  for(const it of libraryItems){
+    if(it.path) byPath.set(it.path, it.localPath || '')
+  }
+  const newSet = new Set()
+  for(const fp of Array.isArray(filepaths)?filepaths:[]){
+    const lp = byPath.get(fp)
+    if(lp) newSet.add(lp)
+  }
+  favorites = newSet
+}
+
+function applyServerPlaylistsToLocal(serverPlaylists){
+  const byPath = new Map()
+  for(const it of libraryItems){
+    if(it.path) byPath.set(it.path, it)
+  }
+  const out = []
+  for(const pl of Array.isArray(serverPlaylists)?serverPlaylists:[]){
+    const items = []
+    for(const fp of Array.isArray(pl.items)?pl.items:[]){
+      const it = byPath.get(fp)
+      if(it) items.push(it)
+    }
+    out.push({ id: pl.id, name: pl.name, items })
+  }
+  playlists = out
+}
+
+async function pushCollectionsToServer(){
+  if(!authState || !authState.token) return
+  const payload = { favorites: favoritesToFilepaths(), playlists: playlistsToServer() }
+  const res = await makeAuthRequest('/user/collections', 'PUT', payload)
+  return res
+}
+
+async function syncCollectionsWithServer(){
+  try{
+    await loadAuthState()
+    if(!authState || !authState.token) return
+    const res = await makeAuthRequest('/user/collections', 'GET')
+    if(res && !res.error){
+      const serverFavs = Array.isArray(res.favorites)?res.favorites:[]
+      const serverPls = Array.isArray(res.playlists)?res.playlists:[]
+      const localFavs = favoritesToFilepaths()
+      const localPls = playlistsToServer()
+      const serverEmpty = serverFavs.length===0 && serverPls.length===0
+      const localEmpty = localFavs.length===0 && localPls.length===0
+      if(serverEmpty && !localEmpty){
+        await pushCollectionsToServer()
+      }else if(!serverEmpty){
+        applyServerFavoritesToLocal(serverFavs)
+        await saveFavorites()
+        applyServerPlaylistsToLocal(serverPls)
+        await savePlaylists()
+        if(currentView==='favorites' || currentView==='playlists'){ render() }
+      }
+    }
   }catch(_){ }
 }
 
@@ -2105,7 +2205,7 @@ function init(){
 
   loadAuthState()
   try{ loadFavorites().then(()=>{ try{ if(currentView==='favorites') render(); else scheduleCardUpdate() }catch(_){ } }) }catch(_){ }
-  loadLibrary()
+  loadLibrary().then(()=>{ try{ syncCollectionsWithServer() }catch(_){ } })
   mountQueueUI()
   try{
     const settingsInit = ()=>{

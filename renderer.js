@@ -620,7 +620,7 @@ async function checkServerConnection() {
         let response;
         try {
             response = await Promise.race([
-                window.electronAPI.apiGet('status/'),
+                makeAuthRequest('/status/', 'GET'),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('API timeout')), 5000))
             ]);
             console.log('[Renderer] API response received:', response);
@@ -673,37 +673,24 @@ async function testConnection() {
         
         const startTime = Date.now();
         
-        const serverStatus = await window.electronAPI.checkServerStatus();
-        console.log('[Renderer] Server status:', serverStatus);
+        let response = await makeAuthRequest('/status/', 'GET');
+        console.log('[Renderer] Server status response:', response);
+        const endTime = Date.now();
+        const responseTime = endTime - startTime;
         
-        if (serverStatus.status === 'not_running') {
+        if (!response || response.error) {
             serverConnected = false;
             resultElement.innerHTML = `
                 <div style="color: #f44336;">
-                    <i class="fas fa-times-circle"></i> Server Not Running<br>
-                    <small>${serverStatus.message}</small><br>
-                    <small style="color: #ff9800;"><strong>${serverStatus.suggestion}</strong></small>
+                    <i class="fas fa-times-circle"></i> API Test Failed<br>
+                    <small>Error: ${(response && response.error) || 'Unknown error'}</small><br>
+                    <small>Response Time: ${responseTime}ms</small>
                 </div>
             `;
             return;
         }
         
-        const response = await window.electronAPI.apiGet('status/');
-        const endTime = Date.now();
-        const responseTime = endTime - startTime;
-        
-        if (response.error) {
-            console.error('[Renderer] Test failed:', response);
-            serverConnected = false;
-            resultElement.innerHTML = `
-                <div style="color: #f44336;">
-                    <i class="fas fa-times-circle"></i> API Test Failed<br>
-                    <small>Error: ${response.error}</small><br>
-                    <small>Status: ${response.statusCode || 'Unknown'}</small><br>
-                    <small>Response Time: ${responseTime}ms</small>
-                </div>
-            `;
-        } else {
+        if (!response.error) {
             console.log('[Renderer] Test successful:', response);
             serverConnected = true;
             lastSuccessfulUpdate = Date.now();
@@ -713,6 +700,16 @@ async function testConnection() {
                     <i class="fas fa-check-circle"></i> Connection Successful<br>
                     <small>Response Time: ${responseTime}ms</small><br>
                     <small>Server: ${currentSettings.serverUrl || 'http://localhost:8000'}</small>
+                </div>
+            `;
+        } else {
+            console.error('[Renderer] Test failed:', response);
+            serverConnected = false;
+            resultElement.innerHTML = `
+                <div style="color: #f44336;">
+                    <i class="fas fa-times-circle"></i> API Test Failed<br>
+                    <small>Error: ${response.error}</small><br>
+                    <small>Response Time: ${responseTime}ms</small>
                 </div>
             `;
         }
@@ -872,27 +869,19 @@ async function checkUpdates() {
         
         const serverUrl = currentSettings.serverUrl || 'http://localhost:8000';
         
-        const serverStatus = await window.electronAPI.checkServerStatus();
-        if (serverStatus.status === 'not_running' || serverStatus.status === 'error') {
-            console.error('[CheckUpdates] Server not available:', serverStatus);
-            showToast('error', 'Cannot connect to server. Please check if the server is running.');
-            return;
-        }
-        
         const localStats = await window.electronAPI.getLocalStats();
         console.log('[CheckUpdates] Local stats:', localStats);
         
-        let commitsEndpoint = 'commits';
+        let commitsResponse;
         if (localStats && localStats.lastSync) {
             const lastSyncDate = new Date(localStats.lastSync);
             const timestamp = lastSyncDate.toISOString();
-            commitsEndpoint = `commits?since_timestamp=${encodeURIComponent(timestamp)}`;
             console.log('[CheckUpdates] Getting commits since:', timestamp);
+            commitsResponse = await makeAuthRequest('/commits', 'GET', { since_timestamp: timestamp });
         } else {
             console.log('[CheckUpdates] No last sync timestamp, getting all commits');
+            commitsResponse = await makeAuthRequest('/commits', 'GET');
         }
-        
-    const commitsResponse = await window.electronAPI.apiGet(commitsEndpoint);
         
         if (commitsResponse.error) {
             console.error('[CheckUpdates] Commits API call failed:', commitsResponse.error);
@@ -948,7 +937,7 @@ async function getAllFiles() {
         updateStatus('Fetching file list from server...');
         
         console.log('[Files] Attempting to get all files with all=true parameter...');
-        const response = await window.electronAPI.apiGet('files', { all: 'true' });
+        const response = await makeAuthRequest('/files', 'GET', { all: 'true' });
         
         if (!response || response.error || !Array.isArray(response.files)) {
             throw new Error(response && response.error ? response.error : 'Invalid files response');
@@ -973,7 +962,7 @@ async function getAllFiles() {
         while (hasMore) {
             updateStatus(`Fetching page ${page}...`);
             console.log(`[Files] Fetching page ${page}...`);
-            const response = await window.electronAPI.apiGet('files', { page: page, page_size: 200 });
+            const response = await makeAuthRequest('/files', 'GET', { page: String(page), page_size: '200' });
             
             if (!response || response.error || !Array.isArray(response.files)) {
                 throw new Error(response && response.error ? response.error : 'Invalid files response');
@@ -2524,7 +2513,7 @@ async function updateStats() {
     try {
         console.log('[Stats] Updating stats...');
         
-        const response = await window.electronAPI.apiGet('status/');
+        const response = await makeAuthRequest('/status/', 'GET');
         console.log('[Stats] Server response:', response);
         if (response && !response.error && typeof response.total_files !== 'undefined') {
             elements.totalFiles.textContent = String(response.total_files);
@@ -3700,34 +3689,32 @@ async function makeAuthRequest(endpoint, method = 'GET', data = null, customToke
     try {
         const base = await getServerUrl();
         const url = `${base}${endpoint}`;
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-
-        if (customToken) {
-            headers['Authorization'] = `Token ${customToken}`;
-        } else if (authState.token) {
-            headers['Authorization'] = `Token ${authState.token}`;
+        const headers = { 'Content-Type': 'application/json' };
+        if (customToken) headers['Authorization'] = `Token ${customToken}`;
+        else if (authState.token) headers['Authorization'] = `Token ${authState.token}`;
+        const params = data && method === 'GET' ? ('?' + new URLSearchParams(data).toString()) : '';
+        const controller = new AbortController();
+        const timeoutMs = 8000;
+        const to = setTimeout(() => { try { controller.abort(); } catch(_) {} }, timeoutMs);
+        try {
+            const res = await fetch(url + params, {
+                method,
+                headers,
+                body: method !== 'GET' && data ? JSON.stringify(data) : null,
+                signal: controller.signal
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) return { error: json.error || json.message || `HTTP ${res.status}` };
+            return json;
+        } catch (e) {
+            if (e && (e.name === 'AbortError' || String(e).includes('aborted'))) {
+                return { error: 'Request timed out' };
+            }
+            return { error: (e && e.message) || 'Request failed' };
+        } finally {
+            clearTimeout(to);
         }
-
-        let response;
-        const params = data ? '?' + new URLSearchParams(data).toString() : '';
-        const options = {
-            method: method,
-            headers: headers,
-            body: (method !== 'GET' && data) ? JSON.stringify(data) : null
-        };
-        
-        response = await fetch(url + (method === 'GET' ? params : ''), options);
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || errorData.message || `HTTP ${response.status}`);
-        }
-        response = await response.json();
-
-        return response;
     } catch (error) {
-        console.error('[Account] API request failed:', error);
         return { error: error.message || 'Request failed' };
     }
 }

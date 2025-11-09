@@ -450,6 +450,7 @@ function ensureSyncWindow() {
       skipTaskbar: true,
       backgroundColor: '#111214',
       webPreferences: {
+        devTools: false,
         nodeIntegration: false,
         contextIsolation: true,
         enableRemoteModule: false,
@@ -487,6 +488,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     webPreferences: {
+      devTools: false,
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
@@ -620,35 +622,7 @@ function createMenu() {
         { role: 'zoomIn' },
         { role: 'zoomOut' },
         { type: 'separator' },
-        { role: 'togglefullscreen' },
-        { type: 'separator' },
-        {
-          label: 'Toggle Developer Tools',
-          accelerator: 'F12',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.toggleDevTools();
-            }
-          }
-        },
-        {
-          label: 'Open Developer Tools',
-          accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.openDevTools();
-            }
-          }
-        },
-        {
-          label: 'Close Developer Tools',
-          accelerator: 'CmdOrCtrl+Shift+J',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.closeDevTools();
-            }
-          }
-        }
+        { role: 'togglefullscreen' }
       ]
     },
     {
