@@ -79,3 +79,7 @@ Issues and pull requests are welcome. Please include your OS, app version, and c
 ### License
 
 MIT
+
+## Screenshots
+
+<img width="1254" height="817" alt="image" src="https://github.com/user-attachments/assets/0d021c0a-00e4-49fc-a997-564e454dbf98" />
