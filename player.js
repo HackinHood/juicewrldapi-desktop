@@ -11,7 +11,7 @@ let playlists = []
 let queue = []
 let currentIndex = -1
 let currentView = 'home'
-let repeatAll = false
+let repeatMode = 0
 let queuePanelEl = null
 let historyPanelEl = null
 let roomsPanelEl = null
@@ -114,7 +114,8 @@ const els = {
   currentTime: document.getElementById('currentTime'),
   duration: document.getElementById('duration'),
   volume: document.getElementById('volumeBar'),
-  favoriteBtn: document.getElementById('favoriteBtn')
+  favoriteBtn: document.getElementById('favoriteBtn'),
+  repeatBtn: document.getElementById('repeatBtn')
 }
 
 function formatTime(sec){
@@ -186,53 +187,85 @@ function guessTags(filename, localPath){
   return { artist, title, album }
 }
 
+function processFile(f){
+  const ext = (f.filename||'').toLowerCase().split('.').pop()
+  const isVideo = ['mp4','webm','mkv','mov'].includes(ext)
+  const isAudio = ['mp3','wav','flac','aac','m4a','ogg'].includes(ext)
+  const tags = {
+    artist: (f.displayArtist || null) || guessTags(f.filename||'Unknown', f.localPath).artist,
+    title: (f.displayTitle || null) || guessTags(f.filename||'Unknown', f.localPath).title,
+    album: (f.displayAlbum || null) || guessTags(f.filename||'Unknown', f.localPath).album
+  }
+  return {
+    title: tags.title || f.filename || 'Unknown',
+    path: f.filepath,
+    localPath: f.localPath,
+    isVideo,
+    isAudio,
+    album: tags.album,
+    artist: tags.artist,
+    year: null,
+    genre: null,
+    albumArtist: null,
+    track: null,
+    thumbnail: null,
+    mtimeMs: f.mtimeMs
+  }
+}
+
 async function loadLibrary(){
   const res = await window.electronAPI.getLocalFiles()
   const files = (res&&res.files)||[]
   
-  libraryItems = files.map(f=>{
-    const ext = (f.filename||'').toLowerCase().split('.').pop()
-    const isVideo = ['mp4','webm','mkv','mov'].includes(ext)
-    const isAudio = ['mp3','wav','flac','aac','m4a','ogg'].includes(ext)
-    const tags = {
-      artist: (f.displayArtist || null) || guessTags(f.filename||'Unknown', f.localPath).artist,
-      title: (f.displayTitle || null) || guessTags(f.filename||'Unknown', f.localPath).title,
-      album: (f.displayAlbum || null) || guessTags(f.filename||'Unknown', f.localPath).album
-    }
-    return {
-      title: tags.title || f.filename || 'Unknown',
-      path: f.filepath,
-      localPath: f.localPath,
-      isVideo,
-      isAudio,
-      album: tags.album,
-      artist: tags.artist,
-      year: null,
-      genre: null,
-      albumArtist: null,
-      track: null,
-      thumbnail: null,
-      mtimeMs: f.mtimeMs
-    }
-  })
+  const INITIAL_BATCH = 150
+  const CHUNK_SIZE = 100
   
-  libraryItems = libraryItems.filter(it=>it.isAudio||it.isVideo)
-  filtered = [...libraryItems]
+  libraryItems = []
+  filtered = []
   albums = new Map()
   artists = new Map()
-  if(!tryLoadCollectionsCache()){
-    for(const item of libraryItems){
-      const aKey = (item.album && String(item.album).trim()) ? String(item.album).trim() : 'Unknown Album'
-      const rKey = (item.albumArtist && String(item.albumArtist).trim()) ? String(item.albumArtist).trim() : (item.artist||'Unknown Artist')
-      if(!albums.has(aKey)) albums.set(aKey, [])
-      if(!artists.has(rKey)) artists.set(rKey, [])
-      albums.get(aKey).push(item)
-      artists.get(rKey).push(item)
+  
+  const initialFiles = files.slice(0, INITIAL_BATCH)
+  for(const f of initialFiles){
+    const item = processFile(f)
+    if(item.isAudio || item.isVideo){
+      libraryItems.push(item)
     }
-    saveCollectionsCache()
   }
+  filtered = [...libraryItems]
   render()
+  
   ;(async()=>{
+    let processed = INITIAL_BATCH
+    while(processed < files.length){
+      const chunk = files.slice(processed, processed + CHUNK_SIZE)
+      const newItems = []
+      for(const f of chunk){
+        const item = processFile(f)
+        if(item.isAudio || item.isVideo){
+          libraryItems.push(item)
+          newItems.push(item)
+        }
+      }
+      filtered = [...libraryItems]
+      processed += CHUNK_SIZE
+      if(newItems.length > 0 && (currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists' || currentView==='favorites')){
+        try{ scheduleRerender() }catch(_){}
+      }
+      await new Promise(r=>setTimeout(r, 10))
+    }
+    
+    if(!tryLoadCollectionsCache()){
+      for(const item of libraryItems){
+        const aKey = (item.album && String(item.album).trim()) ? String(item.album).trim() : 'Unknown Album'
+        const rKey = (item.albumArtist && String(item.albumArtist).trim()) ? String(item.albumArtist).trim() : (item.artist||'Unknown Artist')
+        if(!albums.has(aKey)) albums.set(aKey, [])
+        if(!artists.has(rKey)) artists.set(rKey, [])
+        albums.get(aKey).push(item)
+        artists.get(rKey).push(item)
+      }
+      saveCollectionsCache()
+    }
     await loadPlaylists()
     try{
       const h = await window.electronAPI.getPlayHistory()
@@ -240,15 +273,19 @@ async function loadLibrary(){
     }catch(_){}
     try{ if(currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists') scheduleRerender() }catch(_){}
   })()
+  
   ;(async function hydrateThumbnailsFromCache(){
-    const items = libraryItems
     const limit = Math.max(4, Math.min(16, (navigator.hardwareConcurrency||8)))
     let idx = 0
     async function run(){
       while(true){
         const i = idx++
-        if(i >= items.length) return
-        const it = items[i]
+        if(i >= libraryItems.length) {
+          await new Promise(r=>setTimeout(r, 100))
+          if(i >= libraryItems.length) return
+        }
+        const it = libraryItems[i]
+        if(!it) continue
         try{
           const p = await window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs)
           if(p){
@@ -407,6 +444,7 @@ function render(){
   setNavActive(currentView)
   inDetailView = false
   cachedCards = null
+  try{ restorePlaybarState() }catch(_){ }
   if(currentView==='home') return renderHome()
   if(currentView==='search') return renderSearch()
   if(currentView==='albums') return renderAlbums()
@@ -663,7 +701,8 @@ function renderHome(){
   els.library.style.scrollBehavior = ''
   const title1 = document.createElement('div'); title1.className='section-title'; title1.textContent='Recently Added'
   const row1 = document.createElement('div'); row1.className='row'
-  const recent = [...libraryItems].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24)
+  const sampleSize = Math.min(100, libraryItems.length)
+  const recent = sampleSize > 0 ? [...libraryItems.slice(0, sampleSize)].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24) : []
   els.library.appendChild(title1)
   els.library.appendChild(row1)
   let i1 = 0
@@ -673,6 +712,24 @@ function renderHome(){
     if(i1<recent.length) requestAnimationFrame(fillRecent)
   }
   fillRecent()
+  
+  if(libraryItems.length > sampleSize){
+    requestAnimationFrame(()=>{
+      setTimeout(()=>{
+        const fullRecent = [...libraryItems].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24)
+        if(fullRecent.length !== recent.length || fullRecent.some((item, idx) => item !== recent[idx])){
+          row1.innerHTML = ''
+          i1 = 0
+          function fillRecentUpdated(){
+            const end = Math.min(fullRecent.length, i1+8)
+            for(; i1<end; i1++) row1.appendChild(buildCard(fullRecent[i1], fullRecent, { playScope: 'single' }))
+            if(i1<fullRecent.length) requestAnimationFrame(fillRecentUpdated)
+          }
+          fillRecentUpdated()
+        }
+      }, 0)
+    })
+  }
 
   const title2 = document.createElement('div'); title2.className='section-title'; title2.textContent='Albums'
   const row2 = document.createElement('div'); row2.className='row grid-compact'
@@ -769,7 +826,7 @@ function buildCard(it, list, options){
         const start = list.indexOf(it)
         queue = list.slice(start)
       }
-      repeatAll = false
+      repeatMode = 0
       playIndex(0)
       refreshQueuePanel()
     }
@@ -1013,14 +1070,14 @@ function renderCollectionDetail(name, items, kind){
   const actions = document.createElement('div'); actions.className='collection-actions';
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   playAll.onclick = ()=>{ 
-    const doIt = ()=>{ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with this collection. Continue?', onConfirm: doIt }) }
     else doIt()
   }
   actions.appendChild(playAll)
   const shuffle = document.createElement('div'); shuffle.className='pill'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
   shuffle.onclick = ()=>{ 
-    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with a shuffled order. Continue?', onConfirm: doIt }) }
     else doIt()
   }
@@ -1041,18 +1098,70 @@ function renderCollectionDetail(name, items, kind){
 
 function renderSearch(){
   const q = (els.search.value||'').toLowerCase().trim()
-  const songMatches = libraryItems.filter(it=> it.isAudio && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q)))
-  const videoMatches = libraryItems.filter(it=> it.isVideo && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q)))
-  const albumEntries = Array.from(albums.entries())
-  const albumMatches = albumEntries.filter(([name, items])=> String(name||'').toLowerCase().includes(q))
-  const artistEntries = Array.from(artists.entries())
-  const artistMatches = artistEntries.filter(([name, items])=> String(name||'').toLowerCase().includes(q))
-  const playlistMatches = (playlists||[]).filter(pl=> String(pl.name||'').toLowerCase().includes(q))
-
   teardownVirtualizer()
   els.library.innerHTML = ''
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
+  
+  if(!q){
+    return
+  }
+  
+  const songMatches = []
+  const videoMatches = []
+  const albumMatches = []
+  const artistMatches = []
+  const playlistMatches = []
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const chunkSize = 200
+      let libIdx = 0
+      function filterLibrary(){
+        const end = Math.min(libIdx + chunkSize, libraryItems.length)
+        for(; libIdx < end; libIdx++){
+          const it = libraryItems[libIdx]
+          if(it.isAudio && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q))){
+            songMatches.push(it)
+          }
+          if(it.isVideo && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q))){
+            videoMatches.push(it)
+          }
+        }
+        if(libIdx < libraryItems.length){
+          requestAnimationFrame(filterLibrary)
+        } else {
+          const albumEntries = Array.from(albums.entries())
+          for(const [name, items] of albumEntries){
+            if(String(name||'').toLowerCase().includes(q)){
+              albumMatches.push([name, items])
+            }
+          }
+          const artistEntries = Array.from(artists.entries())
+          for(const [name, items] of artistEntries){
+            if(String(name||'').toLowerCase().includes(q)){
+              artistMatches.push([name, items])
+            }
+          }
+          for(const pl of (playlists||[])){
+            if(String(pl.name||'').toLowerCase().includes(q)){
+              playlistMatches.push(pl)
+            }
+          }
+          renderSearchResults(songMatches, videoMatches, albumMatches, artistMatches, playlistMatches)
+        }
+      }
+      filterLibrary()
+    }, 0)
+  })
+  
+  const loadingMsg = document.createElement('div')
+  loadingMsg.className = 'section-title'
+  loadingMsg.textContent = 'Searching...'
+  els.library.appendChild(loadingMsg)
+  
+  function renderSearchResults(songMatches, videoMatches, albumMatches, artistMatches, playlistMatches){
+    els.library.innerHTML = ''
 
   const addSection = (titleText, contentBuilder) => {
     const has = contentBuilder()
@@ -1137,12 +1246,38 @@ function renderSearch(){
     })
     return true
   })
+  }
 }
 
-function renderMusic(){ renderIncrementalGrid(libraryItems.filter(i=>i.isAudio), { playScope:'single' }) }
+function renderMusic(){
+  teardownVirtualizer()
+  els.library.innerHTML = ''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent='All Music'
+  const grid = document.createElement('div'); grid.className='row'
+  els.library.appendChild(header); els.library.appendChild(grid)
+  
+  const audioItems = []
+  let idx = 0
+  function filterAndRender(){
+    const chunk = 200
+    const end = Math.min(idx + chunk, libraryItems.length)
+    for(; idx < end; idx++){
+      if(libraryItems[idx].isAudio){
+        audioItems.push(libraryItems[idx])
+      }
+    }
+    if(idx < libraryItems.length){
+      requestAnimationFrame(filterAndRender)
+    } else {
+      renderIncrementalGrid(audioItems, { playScope:'single' })
+    }
+  }
+  filterAndRender()
+}
 function renderFavorites(){
   teardownVirtualizer()
-  const items = libraryItems.filter(i=>favorites.has(i.localPath))
   els.library.innerHTML = ''
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
@@ -1150,25 +1285,41 @@ function renderFavorites(){
   const actions = document.createElement('div'); actions.className='collection-actions'
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   const shuffle = document.createElement('div'); shuffle.className='pill secondary'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
-  playAll.onclick = (e)=>{ e.stopPropagation(); if(items.length){ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
-  shuffle.onclick = (e)=>{ e.stopPropagation(); if(items.length){ const arr=[...items]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
   actions.appendChild(playAll); actions.appendChild(shuffle)
   const grid = document.createElement('div'); grid.className='row'
   els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
-  const chunk = 60
-  let i = 0
-  function appendChunk(){
-    const end = Math.min(items.length, i+chunk)
-    for(; i<end; i++){
-      grid.appendChild(buildCard(items[i], items, { playScope: 'single' }))
+  
+  const items = []
+  let filterIdx = 0
+  function filterFavorites(){
+    const chunk = 200
+    const end = Math.min(filterIdx + chunk, libraryItems.length)
+    for(; filterIdx < end; filterIdx++){
+      if(favorites.has(libraryItems[filterIdx].localPath)){
+        items.push(libraryItems[filterIdx])
+      }
     }
-    if(i < items.length) requestAnimationFrame(appendChunk)
+    if(filterIdx < libraryItems.length){
+      requestAnimationFrame(filterFavorites)
+    } else {
+      playAll.onclick = (e)=>{ e.stopPropagation(); if(items.length){ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() } }
+      shuffle.onclick = (e)=>{ e.stopPropagation(); if(items.length){ const arr=[...items]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatMode=0; playIndex(0); refreshQueuePanel() } }
+      const renderChunk = 60
+      let i = 0
+      function appendChunk(){
+        const end = Math.min(items.length, i+renderChunk)
+        for(; i<end; i++){
+          grid.appendChild(buildCard(items[i], items, { playScope: 'single' }))
+        }
+        if(i < items.length) requestAnimationFrame(appendChunk)
+      }
+      appendChunk()
+    }
   }
-  appendChunk()
+  filterFavorites()
 }
 function renderVideos(){
   teardownVirtualizer()
-  const videos = libraryItems.filter(i=>i.isVideo)
   els.library.innerHTML = ''
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
@@ -1176,86 +1327,128 @@ function renderVideos(){
   const actions = document.createElement('div'); actions.className='collection-actions'
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   const shuffle = document.createElement('div'); shuffle.className='pill secondary'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
-  playAll.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ queue=[...videos]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
-  shuffle.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ const arr=[...videos]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
   actions.appendChild(playAll); actions.appendChild(shuffle)
   const grid = document.createElement('div'); grid.className='row'
   els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
-  const chunk = 60
-  let i = 0
-  function appendChunk(){
-    const end = Math.min(videos.length, i+chunk)
-    for(; i<end; i++){
-      grid.appendChild(buildCard(videos[i], videos, { playScope: 'single' }))
+  
+  const videos = []
+  let filterIdx = 0
+  function filterVideos(){
+    const chunk = 200
+    const end = Math.min(filterIdx + chunk, libraryItems.length)
+    for(; filterIdx < end; filterIdx++){
+      if(libraryItems[filterIdx].isVideo){
+        videos.push(libraryItems[filterIdx])
+      }
     }
-    if(i < videos.length) requestAnimationFrame(appendChunk)
+    if(filterIdx < libraryItems.length){
+      requestAnimationFrame(filterVideos)
+    } else {
+      playAll.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ queue=[...videos]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+      shuffle.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ const arr=[...videos]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+      const renderChunk = 60
+      let i = 0
+      function appendChunk(){
+        const end = Math.min(videos.length, i+renderChunk)
+        for(; i<end; i++){
+          grid.appendChild(buildCard(videos[i], videos, { playScope: 'single' }))
+        }
+        if(i < videos.length) requestAnimationFrame(appendChunk)
+      }
+      appendChunk()
+    }
   }
-  appendChunk()
+  filterVideos()
 }
 
 function renderAlbums(){
   teardownVirtualizer()
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
-  const entries = Array.from(albums.entries()).filter(([name, items]) => Array.isArray(items) && items.length > 0)
-  entries.sort(([aName],[bName]) => {
-    const a = String(aName)
-    const b = String(bName)
-    if (a === 'Unknown Album' && b !== 'Unknown Album') return 1
-    if (b === 'Unknown Album' && a !== 'Unknown Album') return -1
-    return a.localeCompare(b)
-  })
-  if(entries.length > 60){
-    renderIncrementalCollections(entries, 'album')
-    return
-  }
   els.library.innerHTML = ''
   const title = document.createElement('div'); title.className='section-title'; title.textContent='All Albums'
   const grid = document.createElement('div'); grid.className='row grid-compact'
   els.library.appendChild(title); els.library.appendChild(grid)
-  let i=0
-  function appendAlbums(){
-    const frag = document.createDocumentFragment()
-    const end = Math.min(i+60, entries.length)
-    for(; i<end; i++){
-      const [name, items] = entries[i]
-      frag.appendChild(buildCollectionCard(name, items, 'album'))
-    }
-    grid.appendChild(frag)
-    if(i<entries.length) requestAnimationFrame(appendAlbums)
-  }
-  appendAlbums()
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const allEntries = Array.from(albums.entries())
+      const entries = []
+      let filterIdx = 0
+      function filterEntries(){
+        const chunk = 100
+        const end = Math.min(filterIdx + chunk, allEntries.length)
+        for(; filterIdx < end; filterIdx++){
+          const [name, items] = allEntries[filterIdx]
+          if(Array.isArray(items) && items.length > 0){
+            entries.push([name, items])
+          }
+        }
+        if(filterIdx < allEntries.length){
+          requestAnimationFrame(filterEntries)
+        } else {
+          entries.sort(([aName],[bName]) => {
+            const a = String(aName)
+            const b = String(bName)
+            if (a === 'Unknown Album' && b !== 'Unknown Album') return 1
+            if (b === 'Unknown Album' && a !== 'Unknown Album') return -1
+            return a.localeCompare(b)
+          })
+          if(entries.length > 60){
+            renderIncrementalCollections(entries, 'album')
+            return
+          }
+          let i=0
+          function appendAlbums(){
+            const frag = document.createDocumentFragment()
+            const end = Math.min(i+60, entries.length)
+            for(; i<end; i++){
+              const [name, items] = entries[i]
+              frag.appendChild(buildCollectionCard(name, items, 'album'))
+            }
+            grid.appendChild(frag)
+            if(i<entries.length) requestAnimationFrame(appendAlbums)
+          }
+          appendAlbums()
+        }
+      }
+      filterEntries()
+    }, 0)
+  })
 }
 
 function renderArtists(){
   teardownVirtualizer()
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
-  const names = Array.from(artists.keys()).sort((a,b)=>String(a).localeCompare(String(b)))
-  const entries = names.map(n=>[n, artists.get(n)||[]])
-  if(entries.length > 60){
-    renderIncrementalCollections(entries, 'artist')
-    return
-  }
-  const draw = () => {
-    els.library.innerHTML = ''
-    const title = document.createElement('div'); title.className='section-title'; title.textContent='All Artists'
-    const grid = document.createElement('div'); grid.className='row grid-compact'
-    els.library.appendChild(title); els.library.appendChild(grid)
-    let i=0
-    function appendArtists(){
-      const frag = document.createDocumentFragment()
-      const end = Math.min(i+60, entries.length)
-      for(; i<end; i++){
-        const [name, items] = entries[i]
-        frag.appendChild(buildCollectionCard(name, items, 'artist'))
+  els.library.innerHTML = ''
+  const title = document.createElement('div'); title.className='section-title'; title.textContent='All Artists'
+  const grid = document.createElement('div'); grid.className='row grid-compact'
+  els.library.appendChild(title); els.library.appendChild(grid)
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const names = Array.from(artists.keys())
+      names.sort((a,b)=>String(a).localeCompare(String(b)))
+      const entries = names.map(n=>[n, artists.get(n)||[]])
+      if(entries.length > 60){
+        renderIncrementalCollections(entries, 'artist')
+        return
       }
-      grid.appendChild(frag)
-      if(i<entries.length) requestAnimationFrame(appendArtists)
-    }
-    appendArtists()
-  }
-  draw()
+      let i=0
+      function appendArtists(){
+        const frag = document.createDocumentFragment()
+        const end = Math.min(i+60, entries.length)
+        for(; i<end; i++){
+          const [name, items] = entries[i]
+          frag.appendChild(buildCollectionCard(name, items, 'artist'))
+        }
+        grid.appendChild(frag)
+        if(i<entries.length) requestAnimationFrame(appendArtists)
+      }
+      appendArtists()
+    }, 0)
+  })
 }
 
 function renderPlaylists(){
@@ -1316,14 +1509,14 @@ function renderPlaylistDetail(playlistIndex){
   const actions = document.createElement('div'); actions.className='collection-actions';
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   playAll.onclick = ()=>{
-    const doIt = ()=>{ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with this playlist. Continue?', onConfirm: doIt }) }
     else doIt()
   }
   actions.appendChild(playAll)
   const shuffle = document.createElement('div'); shuffle.className='pill'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
   shuffle.onclick = ()=>{
-    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with a shuffled order. Continue?', onConfirm: doIt }) }
     else doIt()
   }
@@ -1464,15 +1657,33 @@ function playlistsToServer(){
 
 function applyServerFavoritesToLocal(filepaths){
   const byPath = new Map()
+  const byLocalPath = new Map()
   for(const it of libraryItems){
-    if(it.path) byPath.set(it.path, it.localPath || '')
+    if(it.path){
+      byPath.set(it.path, it.localPath || '')
+      if(it.localPath) byLocalPath.set(it.localPath, it.path)
+    }
   }
-  const newSet = new Set()
+  const serverFavSet = new Set(Array.isArray(filepaths) ? filepaths : [])
+  const newFavorites = new Set()
+  
   for(const fp of Array.isArray(filepaths)?filepaths:[]){
     const lp = byPath.get(fp)
-    if(lp) newSet.add(lp)
+    if(lp){
+      newFavorites.add(lp)
+    }
   }
-  favorites = newSet
+  
+  for(const localPath of favorites){
+    const serverPath = byLocalPath.get(localPath)
+    if(!serverPath){
+      newFavorites.add(localPath)
+    } else if(serverFavSet.has(serverPath)){
+      newFavorites.add(localPath)
+    }
+  }
+  
+  favorites = newFavorites
 }
 
 function applyServerPlaylistsToLocal(serverPlaylists){
@@ -1543,11 +1754,82 @@ function updateNowPlaying(meta){
   try{ const t = document.querySelector('.titlebar-title'); if(t) t.textContent = `${meta?.title||'Player'} - JuiceWRLD API` }catch(_){ }
   try{ setMediaSessionMetadata(meta) }catch(_){ }
   try{ updateFavoriteBtnUI() }catch(_){ }
+  try{ updateVisualizer() }catch(_){ }
+}
+
+async function updateVisualizer(){
+  try{
+    const state = await window.electronAPI.getVisualizerState()
+    if(!state || !state.isOpen) return
+    
+    const media = getMedia()
+    const item = currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null
+    
+    if(item && media && media.src){
+      window.electronAPI.updateVisualizer({
+        title: item.title || 'Unknown',
+        artist: item.artist || 'Unknown Artist',
+        album: item.album || 'Unknown Album',
+        audioSrc: media.src,
+        isPlaying: !media.paused,
+        currentTime: media.currentTime || 0
+      })
+    }
+  }catch(_){}
+}
+
+let visualizerUpdateInterval = null
+function startVisualizerUpdates(){
+  if(visualizerUpdateInterval){
+    clearInterval(visualizerUpdateInterval)
+  }
+  visualizerUpdateInterval = setInterval(()=>{
+    try{ updateVisualizer() }catch(_){}
+  }, 100)
+}
+
+function stopVisualizerUpdates(){
+  if(visualizerUpdateInterval){
+    clearInterval(visualizerUpdateInterval)
+    visualizerUpdateInterval = null
+  }
+}
+
+async function restorePlaybarState(){
+  try{
+    if(currentIndex >= 0 && currentIndex < queue.length){
+      const item = queue[currentIndex]
+      if(!item) return
+      
+      let thumbnail = null
+      const serverPath = item.path || item.localPath || ''
+      if(serverPath){
+        try{
+          const settings = await window.electronAPI.getSettings()
+          const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
+          const norm = base.endsWith('/') ? base.slice(0,-1) : base
+          thumbnail = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
+        }catch(_){ }
+      }
+      
+      updateNowPlaying({
+        title: item.title || 'Unknown',
+        artist: item.artist || 'Unknown Artist',
+        album: item.album || 'Unknown Album',
+        thumbnail: thumbnail,
+        isVideo: item.isVideo || false
+      })
+    }
+  }catch(_){ }
 }
 
 function setPlayingState(isPlaying){
   els.playPause.innerHTML = isPlaying?'<i class="fas fa-pause"></i>':'<i class="fas fa-play"></i>'
   try{ updateMediaSessionState() }catch(_){ }
+  try{ updateVisualizer() }catch(_){ }
+  if(isPlaying){
+    try{ startVisualizerUpdates() }catch(_){}
+  }
 }
 
 function clearPlaybar(){
@@ -1706,7 +1988,7 @@ async function updateNowPlayingOnServer(item, isPlaying = true){
       duration_ms: Math.floor((media.duration || 0) * 1000),
       position_ms: Math.floor((media.currentTime || 0) * 1000),
       is_playing: isPlaying,
-      is_repeat: repeatAll,
+      is_repeat: repeatMode === 1 || repeatMode === 2,
       is_shuffle: false
     }
     
@@ -1776,7 +2058,7 @@ async function stopNowPlayingOnServer(){
   }
 }
 
-function setDiscordPresenceForItem(item, isPlaying){
+async function setDiscordPresenceForItem(item, isPlaying){
   try{
     if(!item) return
     const media = getMedia()
@@ -1788,6 +2070,17 @@ function setDiscordPresenceForItem(item, isPlaying){
       album: item.album || 'Unknown Album',
       largeImageKey: 'logo',
       largeImageText: 'JuiceWRLD API'
+    }
+    const serverPath = item.path || item.localPath || ''
+    if(serverPath){
+      try{
+        const settings = await window.electronAPI.getSettings()
+        const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
+        const norm = base.endsWith('/') ? base.slice(0,-1) : base
+        const albumArtUrl = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
+        payload.largeImageKey = albumArtUrl
+        payload.largeImageText = item.title || 'JuiceWRLD API'
+      }catch(_){ }
     }
     if(isPlaying && durationMs > 0){
       const now = Date.now()
@@ -1925,6 +2218,7 @@ async function playIndex(idx){
     lastLocalControlAt = Date.now()
     try{ broadcastRoomSync({ is_playing: true, position_ms: safePositionMs(), server_path: serverPath, track_title: item.title||'Unknown', artist_name: item.artist||'', album_name: item.album||'' }) }catch(_){ }
     try{ setDiscordPresenceForItem(item, true) }catch(_){ }
+    try{ updateVisualizer() }catch(_){}
   }).catch(()=>{
     setPlayingState(false)
     updateQueueUIOnPlay()
@@ -2013,7 +2307,7 @@ function next(){
   }
   
   if(currentIndex >= queue.length){
-    if(repeatAll){
+    if(repeatMode === 1){
       currentIndex = 0
       playIndex(0)
     } else {
@@ -2048,7 +2342,17 @@ function bindMediaEvents(media){
     els.duration.textContent = formatTime(media.duration)
     try{ updateMediaSessionState() }catch(_){ }
   })
-  media.addEventListener('ended',()=>{ next() })
+  media.addEventListener('ended',()=>{
+    if(repeatMode === 2){
+      const m = getMedia()
+      if(m){
+        m.currentTime = 0
+        m.play().catch(()=>{})
+      }
+    } else {
+      next()
+    }
+  })
   media.addEventListener('error',()=>{ next() })
 }
 
@@ -2122,6 +2426,10 @@ function init(){
   els.playPause.onclick = togglePlay
   els.next.onclick = next
   els.prev.onclick = prev
+  if(els.repeatBtn){
+    els.repeatBtn.onclick = toggleRepeat
+    updateRepeatBtnUI()
+  }
   els.seek.oninput = (e)=>{
     const media = getMedia()
     if(media.duration>0){ 
@@ -2259,6 +2567,19 @@ function init(){
     if(e.code==='ArrowDown'){ const v=Math.max(0,(els.audio.volume-0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.ctrlKey && String(e.key).toLowerCase()==='h'){ e.preventDefault(); window.electronAPI.openMainUI() }
     if(e.ctrlKey && String(e.key).toLowerCase()==='s'){ e.preventDefault(); next() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='v'){ 
+      e.preventDefault()
+      try{
+        window.electronAPI.toggleVisualizer().then(async result=>{
+          if(result && result.isOpen){
+            await updateVisualizer()
+            startVisualizerUpdates()
+          } else {
+            stopVisualizerUpdates()
+          }
+        })
+      }catch(_){}
+    }
     if(e.ctrlKey && String(e.key).toLowerCase()==='r'){ 
       e.preventDefault()
       const m = getMedia()
@@ -2400,6 +2721,31 @@ function updateFavoriteBtnUI(){
   if(icon){ icon.className = isFav ? 'fas fa-star' : 'far fa-star' }
   els.favoriteBtn.classList.toggle('favorited', isFav)
   els.favoriteBtn.title = isFav ? 'Unfavorite' : 'Favorite'
+}
+
+function toggleRepeat(){
+  repeatMode = (repeatMode + 1) % 3
+  updateRepeatBtnUI()
+}
+
+function updateRepeatBtnUI(){
+  if(!els.repeatBtn) return
+  
+  els.repeatBtn.classList.remove('repeat-off', 'repeat-all', 'repeat-one', 'active')
+  
+  if(repeatMode === 0){
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i>'
+    els.repeatBtn.classList.add('repeat-off')
+    els.repeatBtn.title = 'Repeat Off'
+  } else if(repeatMode === 1){
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i>'
+    els.repeatBtn.classList.add('repeat-all', 'active')
+    els.repeatBtn.title = 'Repeat All'
+  } else {
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i><span class="repeat-one-indicator">1</span>'
+    els.repeatBtn.classList.add('repeat-one', 'active')
+    els.repeatBtn.title = 'Repeat One'
+  }
 }
 
 function makePipDraggable() {

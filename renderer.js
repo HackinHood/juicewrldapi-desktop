@@ -1,4 +1,5 @@
 let currentSettings = {};
+const isSyncWindow = typeof window !== 'undefined' && window.location && typeof window.location.search === 'string' && window.location.search.indexOf('sync=1') !== -1;
 let syncInProgress = false;
 let syncTaskHandle = null;
 let syncCancelled = false;
@@ -207,7 +208,9 @@ function initializeApp() {
     updateSyncStatus('disconnected');
     updateLastUpdate();
     updateStats();
-    try { resumePlaybackIfAny(); } catch (_) {}
+    if(!isSyncWindow){
+        try { resumePlaybackIfAny(); } catch (_) {}
+    }
     try { initializeAccountTab(); } catch (e) { console.error('[Init] initializeAccountTab failed:', e); }
 }
 

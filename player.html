@@ -10,15 +10,18 @@
 <body>
     <div class="player-app">
         <div class="titlebar">
-            <div></div>
+            <div class="titlebar-drag"></div>
             <div class="titlebar-center">
                 <img src="assets/icon_32x32.png" alt="" style="width:16px;height:16px; -webkit-app-region: no-drag;">
-                <span class="titlebar-title">Player - JuiceWRLD API</span>
+                <span class="titlebar-title" style="-webkit-app-region: no-drag;">Player - JuiceWRLD API</span>
             </div>
-            <div class="titlebar-controls">
-                <button id="tbMin" class="tb-btn" title="Minimize">—</button>
-                <button id="tbMax" class="tb-btn" title="Maximize">▢</button>
-                <button id="tbClose" class="tb-btn close" title="Close">✕</button>
+            <div class="titlebar-right">
+                <div class="titlebar-drag"></div>
+                <div class="titlebar-controls">
+                    <button id="tbMin" class="tb-btn" title="Minimize">—</button>
+                    <button id="tbMax" class="tb-btn" title="Maximize">▢</button>
+                    <button id="tbClose" class="tb-btn close" title="Close">✕</button>
+                </div>
             </div>
         </div>
         <aside class="sidebar">
@@ -72,6 +75,7 @@
                 <button id="prevBtn" class="icon"><i class="fas fa-backward"></i></button>
                 <button id="playPauseBtn" class="icon primary"><i class="fas fa-play"></i></button>
                 <button id="nextBtn" class="icon"><i class="fas fa-forward"></i></button>
+                <button id="repeatBtn" class="icon" title="Repeat Off"><i class="fas fa-repeat"></i></button>
                 <div class="seek">
                     <span id="currentTime">0:00</span>
                     <input id="seekBar" type="range" min="0" max="100" value="0">

@@ -82,6 +82,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   discordSetEnabled: (enabled) => ipcRenderer.invoke('discord-rpc-enabled', enabled),
   discordStatus: () => ipcRenderer.invoke('discord-rpc-status'),
   
+  toggleVisualizer: () => ipcRenderer.invoke('toggle-visualizer'),
+  getVisualizerState: () => ipcRenderer.invoke('get-visualizer-state'),
+  updateVisualizer: (data) => ipcRenderer.send('visualizer-update', data),
+  onVisualizerUpdate: (callback) => ipcRenderer.on('visualizer-update', (_e, data) => callback(data)),
+  onVisualizerClose: (callback) => ipcRenderer.on('visualizer-close', () => callback()),
+  
   onTransferStart: (callback) => ipcRenderer.on('transfer-start', (_e, data) => callback(data)),
   onTransferProgress: (callback) => ipcRenderer.on('transfer-progress', (_e, data) => callback(data)),
   onTransferComplete: (callback) => ipcRenderer.on('transfer-complete', (_e, data) => callback(data)),

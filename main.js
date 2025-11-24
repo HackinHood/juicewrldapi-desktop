@@ -406,6 +406,7 @@ let DOWNLOADS_DIR = getDownloadsPath();
 let METADATA_FILE = getMetadataPath();
 
 let mainWindow;
+let visualizerWindow = null;
 let tray = null;
 let fileStatsCache = new Map();
 let bgSyncWorker = null;
@@ -458,7 +459,7 @@ function ensureSyncWindow() {
         preload: path.join(__dirname, 'preload.js')
       }
     })
-    syncWindow.loadFile('index.html')
+    syncWindow.loadFile('index.html?sync=1')
     syncWindow.on('closed', () => { syncWindow = null })
   } catch (_) {}
 }
@@ -470,6 +471,65 @@ function destroySyncWindow() {
     syncWindow = null
     try { win.close() } catch (_) {}
   } catch (_) {}
+}
+
+function toggleVisualizerWindow() {
+  try {
+    if (visualizerWindow) {
+      visualizerWindow.close()
+      return
+    }
+    
+    const primaryDisplay = require('electron').screen.getPrimaryDisplay()
+    const { width, height } = primaryDisplay.workAreaSize
+    
+    visualizerWindow = new BrowserWindow({
+      width: 600,
+      height: 300,
+      x: Math.floor((width - 600) / 2),
+      y: Math.floor((height - 300) / 2),
+      minWidth: 400,
+      minHeight: 200,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: true,
+      backgroundColor: '#00000000',
+      webPreferences: {
+        devTools: false,
+        nodeIntegration: false,
+        contextIsolation: true,
+        enableRemoteModule: false,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    })
+    
+    visualizerWindow.loadFile('visualizer.html')
+    
+    visualizerWindow.once('ready-to-show', () => {
+      visualizerWindow.show()
+    })
+    
+    visualizerWindow.on('closed', () => {
+      visualizerWindow = null
+      try {
+        const wins = BrowserWindow.getAllWindows()
+        for (const win of wins) {
+          if (win && !win.isDestroyed() && win.webContents) {
+            try { win.webContents.send('visualizer-close') } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    })
+    
+  } catch (error) {
+    console.error('[Visualizer] Error toggling window:', error)
+    if (visualizerWindow) {
+      try { visualizerWindow.close() } catch (_) {}
+      visualizerWindow = null
+    }
+  }
 }
 
 function createWindow() {
@@ -1253,6 +1313,29 @@ ipcMain.handle('open-player-mode', () => {
   } catch (_) {
     return false;
   }
+});
+
+ipcMain.handle('toggle-visualizer', () => {
+  try {
+    const wasOpen = !!visualizerWindow
+    toggleVisualizerWindow()
+    const isOpen = !!visualizerWindow
+    return { success: true, isOpen: isOpen, wasOpen: wasOpen }
+  } catch (error) {
+    return { success: false, error: error.message, isOpen: false }
+  }
+});
+
+ipcMain.handle('get-visualizer-state', () => {
+  return { isOpen: !!visualizerWindow }
+});
+
+ipcMain.on('visualizer-update', (event, data) => {
+  try {
+    if (visualizerWindow && !visualizerWindow.isDestroyed()) {
+      visualizerWindow.webContents.send('visualizer-update', data)
+    }
+  } catch (_) {}
 });
 
 ipcMain.handle('open-main-ui', () => {
