@@ -9,15 +9,18 @@
 </head>
 <body>
     <div class="titlebar">
-        <div></div>
+        <div class="titlebar-drag"></div>
         <div class="titlebar-center">
             <img src="assets/icon_32x32.png" alt="App Icon" style="width:16px;height:16px; -webkit-app-region: no-drag; margin-right:8px;">
-            <span class="titlebar-title">JuiceWRLD API</span>
+            <span class="titlebar-title" style="-webkit-app-region: no-drag;">JuiceWRLD API</span>
         </div>
-        <div class="titlebar-controls">
-            <button id="minimizeBtn" class="titlebar-button"><i class="fas fa-window-minimize"></i></button>
-            <button id="maximizeBtn" class="titlebar-button"><i class="fas fa-window-maximize"></i></button>
-            <button id="closeBtn" class="titlebar-button close"><i class="fas fa-times"></i></button>
+        <div class="titlebar-right">
+            <div class="titlebar-drag"></div>
+            <div class="titlebar-controls">
+                <button id="minimizeBtn" class="titlebar-button"><i class="fas fa-window-minimize"></i></button>
+                <button id="maximizeBtn" class="titlebar-button"><i class="fas fa-window-maximize"></i></button>
+                <button id="closeBtn" class="titlebar-button close"><i class="fas fa-times"></i></button>
+            </div>
         </div>
     </div>
     <div class="app-container" style="padding-top:36px;">
@@ -376,6 +379,23 @@
                         </div>
 
                         <div class="settings-section">
+                            <h3>Playback Settings</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="crossfadeEnabled">
+                                    Enable Crossfade
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Crossfade duration:</label>
+                                <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
+                                    <input type="range" id="crossfadeDuration" min="1" max="10" step="1" value="5">
+                                    <span id="crossfadeDurationValue" style="min-width: 3rem; text-align: right;">5s</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
                             <h3>Folder Selection</h3>
                             <div class="setting-item">
                                 <label class="setting-label">Select Root Folders to Sync:</label>
@@ -514,7 +534,7 @@
                                     <form id="pairDeviceForm" class="auth-form">
                                         <div class="form-group">
                                             <label for="pairingCode">Pairing Code</label>
-                                            <input type="text" id="pairingCode" class="form-input" placeholder="Enter pairing code" required pattern="[A-Z0-9_\-]{1,8}" maxlength="8" style="text-transform: uppercase;">
+                                            <input type="text" id="pairingCode" class="form-input" placeholder="Enter pairing code" required pattern="\s*[A-Za-z0-9_\-]{1,8}\s*" maxlength="8" style="text-transform: uppercase;">
                                             <small class="form-hint">Enter the code from another device (up to 8 characters)</small>
                                         </div>
                                         <div class="form-group">

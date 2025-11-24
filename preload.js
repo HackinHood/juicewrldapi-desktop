@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   savePlaylists: (playlists) => ipcRenderer.invoke('save-playlists', playlists),
   getPlaylists: () => ipcRenderer.invoke('get-playlists'),
+  getFavorites: () => ipcRenderer.invoke('get-favorites'),
+  saveFavorites: (favorites) => ipcRenderer.invoke('save-favorites', favorites),
   savePlayHistory: (history) => ipcRenderer.invoke('save-play-history', history),
   getPlayHistory: () => ipcRenderer.invoke('get-play-history'),
   getActiveTransfers: () => ipcRenderer.invoke('get-active-transfers'),
@@ -52,6 +54,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifySyncComplete: () => ipcRenderer.invoke('notify-sync-complete'),
   getThumbnailPath: (localPath, mtimeMs) => ipcRenderer.invoke('get-thumbnail-path', localPath, mtimeMs),
   saveThumbnail: (localPath, mtimeMs, dataUrl) => ipcRenderer.invoke('save-thumbnail', localPath, mtimeMs, dataUrl),
+  generateVideoThumbnail: (localPath, mtimeMs) => ipcRenderer.invoke('generate-video-thumbnail', localPath, mtimeMs),
   pathToFileURL: (p) => {
     try {
       const urlMod = require('url')
@@ -78,6 +81,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   discordClear: () => ipcRenderer.invoke('discord-rpc-clear'),
   discordSetEnabled: (enabled) => ipcRenderer.invoke('discord-rpc-enabled', enabled),
   discordStatus: () => ipcRenderer.invoke('discord-rpc-status'),
+  
+  toggleVisualizer: () => ipcRenderer.invoke('toggle-visualizer'),
+  getVisualizerState: () => ipcRenderer.invoke('get-visualizer-state'),
+  updateVisualizer: (data) => ipcRenderer.send('visualizer-update', data),
+  onVisualizerUpdate: (callback) => ipcRenderer.on('visualizer-update', (_e, data) => callback(data)),
+  onVisualizerClose: (callback) => ipcRenderer.on('visualizer-close', () => callback()),
   
   onTransferStart: (callback) => ipcRenderer.on('transfer-start', (_e, data) => callback(data)),
   onTransferProgress: (callback) => ipcRenderer.on('transfer-progress', (_e, data) => callback(data)),

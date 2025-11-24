@@ -17,7 +17,11 @@
     align-items: center;
     padding: 6px 8px;
     z-index: 1000;
+}
+
+.titlebar-drag {
     -webkit-app-region: drag;
+    height: 100%;
 }
 
 .titlebar-icon {
@@ -36,11 +40,19 @@
     display: flex;
     justify-content: center;
     align-items: center;
+    -webkit-app-region: no-drag;
 }
 
 .titlebar-title {
     font-size: 12px;
     opacity: 0.9;
+}
+
+.titlebar-right {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
 }
 
 .titlebar-controls {

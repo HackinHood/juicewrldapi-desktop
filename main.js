@@ -377,7 +377,7 @@ function createOptimizedTrayIcon() {
       const trayIcon = icon.resize({ 
         width: 16, 
         height: 16,
-        quality: 'best' // Use best quality for resizing
+        quality: 'best'
       });
       
       console.log('[Tray Icon] Created optimized 16x16 tray icon');
@@ -387,7 +387,7 @@ function createOptimizedTrayIcon() {
     if (process.platform === 'darwin') {
       const size = icon.getSize();
       console.log(`[Tray Icon] Original mac icon size: ${size.width}x${size.height}`);
-      const target = 22; // recommended logical size for macOS status bar
+      const target = 22;
       const trayIcon = icon.resize({ width: target, height: target, quality: 'best' });
       try { trayIcon.setTemplateImage(true); } catch (_) {}
       console.log('[Tray Icon] Created mac template tray icon');
@@ -406,6 +406,7 @@ let DOWNLOADS_DIR = getDownloadsPath();
 let METADATA_FILE = getMetadataPath();
 
 let mainWindow;
+let visualizerWindow = null;
 let tray = null;
 let fileStatsCache = new Map();
 let bgSyncWorker = null;
@@ -450,6 +451,7 @@ function ensureSyncWindow() {
       skipTaskbar: true,
       backgroundColor: '#111214',
       webPreferences: {
+        devTools: false,
         nodeIntegration: false,
         contextIsolation: true,
         enableRemoteModule: false,
@@ -457,7 +459,7 @@ function ensureSyncWindow() {
         preload: path.join(__dirname, 'preload.js')
       }
     })
-    syncWindow.loadFile('index.html')
+    syncWindow.loadFile('index.html?sync=1')
     syncWindow.on('closed', () => { syncWindow = null })
   } catch (_) {}
 }
@@ -469,6 +471,65 @@ function destroySyncWindow() {
     syncWindow = null
     try { win.close() } catch (_) {}
   } catch (_) {}
+}
+
+function toggleVisualizerWindow() {
+  try {
+    if (visualizerWindow) {
+      visualizerWindow.close()
+      return
+    }
+    
+    const primaryDisplay = require('electron').screen.getPrimaryDisplay()
+    const { width, height } = primaryDisplay.workAreaSize
+    
+    visualizerWindow = new BrowserWindow({
+      width: 600,
+      height: 300,
+      x: Math.floor((width - 600) / 2),
+      y: Math.floor((height - 300) / 2),
+      minWidth: 400,
+      minHeight: 200,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: true,
+      backgroundColor: '#00000000',
+      webPreferences: {
+        devTools: false,
+        nodeIntegration: false,
+        contextIsolation: true,
+        enableRemoteModule: false,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    })
+    
+    visualizerWindow.loadFile('visualizer.html')
+    
+    visualizerWindow.once('ready-to-show', () => {
+      visualizerWindow.show()
+    })
+    
+    visualizerWindow.on('closed', () => {
+      visualizerWindow = null
+      try {
+        const wins = BrowserWindow.getAllWindows()
+        for (const win of wins) {
+          if (win && !win.isDestroyed() && win.webContents) {
+            try { win.webContents.send('visualizer-close') } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    })
+    
+  } catch (error) {
+    console.error('[Visualizer] Error toggling window:', error)
+    if (visualizerWindow) {
+      try { visualizerWindow.close() } catch (_) {}
+      visualizerWindow = null
+    }
+  }
 }
 
 function createWindow() {
@@ -487,6 +548,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     webPreferences: {
+      devTools: false,
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
@@ -620,35 +682,7 @@ function createMenu() {
         { role: 'zoomIn' },
         { role: 'zoomOut' },
         { type: 'separator' },
-        { role: 'togglefullscreen' },
-        { type: 'separator' },
-        {
-          label: 'Toggle Developer Tools',
-          accelerator: 'F12',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.toggleDevTools();
-            }
-          }
-        },
-        {
-          label: 'Open Developer Tools',
-          accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.openDevTools();
-            }
-          }
-        },
-        {
-          label: 'Close Developer Tools',
-          accelerator: 'CmdOrCtrl+Shift+J',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.closeDevTools();
-            }
-          }
-        }
+        { role: 'togglefullscreen' }
       ]
     },
     {
@@ -1202,6 +1236,8 @@ app.whenReady().then(() => {
     console.error('[App] Failed to initialize local storage');
   }
   
+  try { store.delete('playbackState'); } catch (_) {}
+  
   applyStartupSettings();
   
   createWindow();
@@ -1279,6 +1315,29 @@ ipcMain.handle('open-player-mode', () => {
   }
 });
 
+ipcMain.handle('toggle-visualizer', () => {
+  try {
+    const wasOpen = !!visualizerWindow
+    toggleVisualizerWindow()
+    const isOpen = !!visualizerWindow
+    return { success: true, isOpen: isOpen, wasOpen: wasOpen }
+  } catch (error) {
+    return { success: false, error: error.message, isOpen: false }
+  }
+});
+
+ipcMain.handle('get-visualizer-state', () => {
+  return { isOpen: !!visualizerWindow }
+});
+
+ipcMain.on('visualizer-update', (event, data) => {
+  try {
+    if (visualizerWindow && !visualizerWindow.isDestroyed()) {
+      visualizerWindow.webContents.send('visualizer-update', data)
+    }
+  } catch (_) {}
+});
+
 ipcMain.handle('open-main-ui', () => {
   try {
     if (mainWindow) {
@@ -1328,6 +1387,8 @@ ipcMain.handle('get-settings', () => {
     maxTransfers: 3,
     logLevel: 'info',
     serverUrl: 'https://m.juicewrldapi.com',
+    crossfadeEnabled: false,
+    crossfadeDuration: 5,
     windowWidth: 1200,
     windowHeight: 800,
     windowX: undefined,
@@ -1356,6 +1417,8 @@ ipcMain.handle('save-settings', (event, settings) => {
     selectedFolders: Array.isArray(settings.selectedFolders) ? settings.selectedFolders : [],
     customStoragePath: typeof settings.customStoragePath === 'string' ? settings.customStoragePath : undefined,
     lastActiveTab: ['overview', 'local-files', 'server-files', 'sync', 'settings', 'account'].includes(settings.lastActiveTab) ? settings.lastActiveTab : 'overview',
+    crossfadeEnabled: Boolean(settings.crossfadeEnabled),
+    crossfadeDuration: Math.max(1, Math.min(10, parseInt(settings.crossfadeDuration) || 5)),
     authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined
   };
 
@@ -2650,6 +2713,25 @@ ipcMain.handle('get-play-history', async () => {
   }
 });
 
+ipcMain.handle('get-favorites', async () => {
+  try {
+    const favorites = store.get('favorites', []);
+    return { success: true, favorites };
+  } catch (error) {
+    return { success: false, error: error.message, favorites: [] };
+  }
+});
+
+ipcMain.handle('save-favorites', async (event, favorites) => {
+  try {
+    const list = Array.isArray(favorites) ? favorites : [];
+    store.set('favorites', list);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('get-thumbnail-path', async (event, localPath, mtimeMs) => {
   try {
     if (typeof localPath !== 'string' || !localPath) return null;
@@ -2700,6 +2782,31 @@ ipcMain.handle('save-thumbnail', async (event, localPath, mtimeMs, dataUrl) => {
     }
   } catch (e) {
     return { success: false, error: e && e.message ? e.message : 'error' };
+  }
+});
+
+ipcMain.handle('generate-video-thumbnail', async (event, localPath, mtimeMs) => {
+  try {
+    const ok = await tryGenerateVideoThumbnail(localPath, mtimeMs);
+    if (!ok) return { success: false };
+    const target = getThumbnailCacheFile(localPath, mtimeMs, '.jpg');
+    if (target && fs.existsSync(target)) {
+      try { const { pathToFileURL } = require('url'); return { success: true, url: pathToFileURL(target).href, path: target }; } catch (_) { return { success: true, url: target, path: target }; }
+    }
+    const crypto = require('crypto');
+    const key = `${localPath}:${mtimeMs || 'na'}`;
+    const name = crypto.createHash('md5').update(key).digest('hex');
+    const dir = getThumbnailsPath();
+    const exts = ['.jpg','.jpeg','.png'];
+    for (const ext of exts) {
+      const p = path.join(dir, name + ext);
+      if (fs.existsSync(p)) {
+        try { const { pathToFileURL } = require('url'); return { success: true, url: pathToFileURL(p).href, path: p }; } catch (_) { return { success: true, url: p, path: p }; }
+      }
+    }
+    return { success: false };
+  } catch (_) {
+    return { success: false };
   }
 });
 

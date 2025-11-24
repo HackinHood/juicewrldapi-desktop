@@ -1,4 +1,5 @@
 let currentSettings = {};
+const isSyncWindow = typeof window !== 'undefined' && window.location && typeof window.location.search === 'string' && window.location.search.indexOf('sync=1') !== -1;
 let syncInProgress = false;
 let syncTaskHandle = null;
 let syncCancelled = false;
@@ -113,11 +114,14 @@ const elements = {
     maxTransfers: document.getElementById('maxTransfers'),
     logLevel: document.getElementById('logLevel'),
     serverUrl: document.getElementById('serverUrl'),
+    crossfadeEnabled: document.getElementById('crossfadeEnabled'),
+    crossfadeDuration: document.getElementById('crossfadeDuration'),
+    crossfadeDurationValue: document.getElementById('crossfadeDurationValue'),
     saveSettingsBtn: document.getElementById('saveSettingsBtn'),
             resetSettingsBtn: document.getElementById('resetSettingsBtn'),
         exportSettingsBtn: document.getElementById('exportSettingsBtn'),
         importSettingsBtn: document.getElementById('importSettingsBtn'),
-    unsavedBadge: document.getElementById('unsavedBadge'),
+        unsavedBadge: document.getElementById('unsavedBadge'),
     
     storagePath: document.getElementById('storagePath'),
     changeStoragePathBtn: document.getElementById('changeStoragePathBtn'),
@@ -207,46 +211,102 @@ function initializeApp() {
     updateSyncStatus('disconnected');
     updateLastUpdate();
     updateStats();
-    try { resumePlaybackIfAny(); } catch (_) {}
+    if(!isSyncWindow){
+        try { resumePlaybackIfAny(); } catch (_) {}
+    }
     try { initializeAccountTab(); } catch (e) { console.error('[Init] initializeAccountTab failed:', e); }
 }
 
 let backgroundAudio = null;
+let backgroundState = null;
 async function resumePlaybackIfAny() {
     try {
         const res = await window.electronAPI.getPlaybackState();
         if (!res || !res.success || !res.state) return;
         const state = res.state;
         if (!Array.isArray(state.queue) || state.queue.length === 0) return;
+        backgroundState = {
+            index: typeof state.index === 'number' ? state.index : 0,
+            queue: state.queue.slice(),
+            time: typeof state.time === 'number' ? Math.max(0, state.time) : 0,
+            paused: state.handoff === 'player_to_main' ? !!state.paused : true,
+            volume: typeof state.volume === 'number' ? Math.max(0, Math.min(1, state.volume)) : 1,
+            isVideo: false,
+            handoff: state.handoff || null
+        };
         if (!backgroundAudio) {
             backgroundAudio = document.createElement('audio');
             backgroundAudio.style.display = 'none';
             document.body.appendChild(backgroundAudio);
+            backgroundAudio.addEventListener('ended', async () => {
+                try {
+                    if (!backgroundState || !Array.isArray(backgroundState.queue) || backgroundState.queue.length === 0) return;
+                    let idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+                    idx += 1;
+                    if (idx >= backgroundState.queue.length) {
+                        backgroundState.index = backgroundState.queue.length - 1;
+                        backgroundState.time = 0;
+                        backgroundState.paused = true;
+                        try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                        return;
+                    }
+                    backgroundState.index = idx;
+                    backgroundState.time = 0;
+                    backgroundState.paused = false;
+                    const nextItem = backgroundState.queue[backgroundState.index];
+                    if (!nextItem) return;
+                    const nextUrl = await window.electronAPI.pathToFileURL(nextItem.localPath);
+                    if (!nextUrl) return;
+                    if (backgroundAudio.src !== nextUrl) backgroundAudio.src = nextUrl;
+                    try { backgroundAudio.load(); } catch (_) {}
+                    backgroundAudio.currentTime = 0;
+                    try { await backgroundAudio.play(); } catch (_) {
+                        backgroundState.paused = true;
+                    }
+                    try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                } catch (_) {}
+            });
         }
-        const item = state.queue[state.index] || state.queue[0];
+        const idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+        const item = backgroundState.queue[idx] || backgroundState.queue[0];
         const fileUrl = await window.electronAPI.pathToFileURL(item.localPath);
         if (!fileUrl) return;
         if (backgroundAudio.src !== fileUrl) backgroundAudio.src = fileUrl;
         try { backgroundAudio.load(); } catch (_) {}
-        if (typeof state.volume === 'number') backgroundAudio.volume = Math.max(0, Math.min(1, state.volume));
-        if (typeof state.time === 'number') {
-            const seekTo = Math.max(0, state.time);
+        backgroundAudio.volume = backgroundState.volume;
+        if (typeof backgroundState.time === 'number') {
+            const seekTo = Math.max(0, backgroundState.time);
             const setTime = () => {
                 try { backgroundAudio.currentTime = seekTo; } catch(_) {}
             };
             if (isNaN(backgroundAudio.duration)) {
-                backgroundAudio.addEventListener('loadedmetadata', function once(){
+                const once = () => {
                     backgroundAudio.removeEventListener('loadedmetadata', once);
                     setTime();
-                });
+                };
+                backgroundAudio.addEventListener('loadedmetadata', once);
             } else {
                 setTime();
             }
         }
-        if (!state.paused) {
-            try { await backgroundAudio.play(); } catch (_) {}
+        if (!backgroundState.paused && state.handoff === 'player_to_main') {
+            try { await backgroundAudio.play(); } catch (_) {
+                backgroundState.paused = true;
+            }
         }
-        try { await window.electronAPI.clearPlaybackState(); } catch (_) {}
+        try {
+            const saved = {
+                index: backgroundState.index,
+                queue: backgroundState.queue,
+                time: backgroundState.time,
+                paused: backgroundState.paused,
+                volume: backgroundState.volume,
+                isVideo: false,
+                handoff: 'main_active'
+            };
+            await window.electronAPI.savePlaybackState(saved);
+            backgroundState = saved;
+        } catch (_) {}
     } catch (_) {}
 }
 
@@ -282,14 +342,90 @@ function setupEventListeners() {
         }
     });
     
-    window.addEventListener('keydown', (e) => {
+    window.addEventListener('keydown', async (e) => {
         const tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         if (e.ctrlKey && String(e.key).toLowerCase() === 'h') {
             e.preventDefault();
             switchTab('overview');
         }
+        if (e.ctrlKey && String(e.key).toLowerCase() === 's') {
+            e.preventDefault();
+            try {
+                if (!backgroundState || !Array.isArray(backgroundState.queue) || backgroundState.queue.length === 0) return;
+                if (!backgroundAudio) return;
+                let idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+                idx += 1;
+                if (idx >= backgroundState.queue.length) idx = 0;
+                backgroundState.index = idx;
+                backgroundState.time = 0;
+                const item = backgroundState.queue[idx];
+                const fileUrl = await window.electronAPI.pathToFileURL(item.localPath);
+                if (!fileUrl) return;
+                if (backgroundAudio.src !== fileUrl) backgroundAudio.src = fileUrl;
+                try { backgroundAudio.load(); } catch (_) {}
+                backgroundAudio.currentTime = 0;
+                if (!backgroundAudio.paused) {
+                    try { await backgroundAudio.play(); } catch (_) {}
+                }
+                backgroundState.paused = backgroundAudio.paused;
+                backgroundState.volume = backgroundAudio.volume;
+                try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+            } catch (_) {}
+        }
+        if (e.ctrlKey && String(e.key).toLowerCase() === 'r') {
+            e.preventDefault();
+            try {
+                if (backgroundAudio && backgroundAudio.src) {
+                    backgroundAudio.currentTime = 0;
+                    if (backgroundAudio.paused) {
+                        try { await backgroundAudio.play(); } catch (_) {}
+                    }
+                    if (backgroundState) {
+                        backgroundState.time = 0;
+                        backgroundState.paused = backgroundAudio.paused;
+                        backgroundState.volume = backgroundAudio.volume;
+                        try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+        }
     });
+    
+    try {
+        const btn = document.getElementById('playerModeBtn');
+        if (btn) {
+            btn.onclick = async () => {
+                try {
+                    if (backgroundState && backgroundAudio) {
+                        try {
+                            if (!isNaN(backgroundAudio.currentTime)) backgroundState.time = backgroundAudio.currentTime;
+                        } catch (_) {}
+                        try { backgroundState.paused = backgroundAudio.paused; } catch (_) {}
+                        try { backgroundState.volume = backgroundAudio.volume; } catch (_) {}
+                    }
+                    if (backgroundAudio) {
+                        try { backgroundAudio.pause(); } catch (_) {}
+                        backgroundAudio.src = '';
+                        try { backgroundAudio.load(); } catch (_) {}
+                    }
+                    if (backgroundState && Array.isArray(backgroundState.queue) && backgroundState.queue.length>0) {
+                        const updated = {
+                            index: typeof backgroundState.index === 'number' ? backgroundState.index : 0,
+                            queue: backgroundState.queue,
+                            time: typeof backgroundState.time === 'number' ? Math.max(0, backgroundState.time) : 0,
+                            paused: !!backgroundState.paused,
+                            volume: typeof backgroundState.volume === 'number' ? Math.max(0, Math.min(1, backgroundState.volume)) : 1,
+                            isVideo: false,
+                            handoff: 'main_to_player'
+                        };
+                        await window.electronAPI.savePlaybackState(updated);
+                    }
+                } catch (_) {}
+                window.electronAPI.openPlayerMode();
+            };
+        }
+    } catch (_) {}
 
     elements.syncBtn.addEventListener('click', startSyncOptimized);
     elements.checkUpdatesBtn.addEventListener('click', checkUpdates);
@@ -328,6 +464,18 @@ function setupEventListeners() {
         elements.maxTransfers.addEventListener('change', markDirty);
         elements.logLevel.addEventListener('change', markDirty);
         elements.serverUrl.addEventListener('input', markDirty);
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.addEventListener('change', markDirty);
+        }
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.addEventListener('input', () => {
+                markDirty();
+                const v = parseInt(elements.crossfadeDuration.value) || 5;
+                if (elements.crossfadeDurationValue) {
+                    elements.crossfadeDurationValue.textContent = v + 's';
+                }
+            });
+        }
         
         elements.autoSyncEnabled.addEventListener('change', () => {
             elements.autoSyncInterval.disabled = !elements.autoSyncEnabled.checked;
@@ -620,7 +768,7 @@ async function checkServerConnection() {
         let response;
         try {
             response = await Promise.race([
-                window.electronAPI.apiGet('status/'),
+                makeAuthRequest('/status/', 'GET'),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('API timeout')), 5000))
             ]);
             console.log('[Renderer] API response received:', response);
@@ -673,37 +821,24 @@ async function testConnection() {
         
         const startTime = Date.now();
         
-        const serverStatus = await window.electronAPI.checkServerStatus();
-        console.log('[Renderer] Server status:', serverStatus);
+        let response = await makeAuthRequest('/status/', 'GET');
+        console.log('[Renderer] Server status response:', response);
+        const endTime = Date.now();
+        const responseTime = endTime - startTime;
         
-        if (serverStatus.status === 'not_running') {
+        if (!response || response.error) {
             serverConnected = false;
             resultElement.innerHTML = `
                 <div style="color: #f44336;">
-                    <i class="fas fa-times-circle"></i> Server Not Running<br>
-                    <small>${serverStatus.message}</small><br>
-                    <small style="color: #ff9800;"><strong>${serverStatus.suggestion}</strong></small>
+                    <i class="fas fa-times-circle"></i> API Test Failed<br>
+                    <small>Error: ${(response && response.error) || 'Unknown error'}</small><br>
+                    <small>Response Time: ${responseTime}ms</small>
                 </div>
             `;
             return;
         }
         
-        const response = await window.electronAPI.apiGet('status/');
-        const endTime = Date.now();
-        const responseTime = endTime - startTime;
-        
-        if (response.error) {
-            console.error('[Renderer] Test failed:', response);
-            serverConnected = false;
-            resultElement.innerHTML = `
-                <div style="color: #f44336;">
-                    <i class="fas fa-times-circle"></i> API Test Failed<br>
-                    <small>Error: ${response.error}</small><br>
-                    <small>Status: ${response.statusCode || 'Unknown'}</small><br>
-                    <small>Response Time: ${responseTime}ms</small>
-                </div>
-            `;
-        } else {
+        if (!response.error) {
             console.log('[Renderer] Test successful:', response);
             serverConnected = true;
             lastSuccessfulUpdate = Date.now();
@@ -713,6 +848,16 @@ async function testConnection() {
                     <i class="fas fa-check-circle"></i> Connection Successful<br>
                     <small>Response Time: ${responseTime}ms</small><br>
                     <small>Server: ${currentSettings.serverUrl || 'http://localhost:8000'}</small>
+                </div>
+            `;
+        } else {
+            console.error('[Renderer] Test failed:', response);
+            serverConnected = false;
+            resultElement.innerHTML = `
+                <div style="color: #f44336;">
+                    <i class="fas fa-times-circle"></i> API Test Failed<br>
+                    <small>Error: ${response.error}</small><br>
+                    <small>Response Time: ${responseTime}ms</small>
                 </div>
             `;
         }
@@ -872,27 +1017,19 @@ async function checkUpdates() {
         
         const serverUrl = currentSettings.serverUrl || 'http://localhost:8000';
         
-        const serverStatus = await window.electronAPI.checkServerStatus();
-        if (serverStatus.status === 'not_running' || serverStatus.status === 'error') {
-            console.error('[CheckUpdates] Server not available:', serverStatus);
-            showToast('error', 'Cannot connect to server. Please check if the server is running.');
-            return;
-        }
-        
         const localStats = await window.electronAPI.getLocalStats();
         console.log('[CheckUpdates] Local stats:', localStats);
         
-        let commitsEndpoint = 'commits';
+        let commitsResponse;
         if (localStats && localStats.lastSync) {
             const lastSyncDate = new Date(localStats.lastSync);
             const timestamp = lastSyncDate.toISOString();
-            commitsEndpoint = `commits?since_timestamp=${encodeURIComponent(timestamp)}`;
             console.log('[CheckUpdates] Getting commits since:', timestamp);
+            commitsResponse = await makeAuthRequest('/commits', 'GET', { since_timestamp: timestamp });
         } else {
             console.log('[CheckUpdates] No last sync timestamp, getting all commits');
+            commitsResponse = await makeAuthRequest('/commits', 'GET');
         }
-        
-    const commitsResponse = await window.electronAPI.apiGet(commitsEndpoint);
         
         if (commitsResponse.error) {
             console.error('[CheckUpdates] Commits API call failed:', commitsResponse.error);
@@ -948,7 +1085,7 @@ async function getAllFiles() {
         updateStatus('Fetching file list from server...');
         
         console.log('[Files] Attempting to get all files with all=true parameter...');
-        const response = await window.electronAPI.apiGet('files', { all: 'true' });
+        const response = await makeAuthRequest('/files', 'GET', { all: 'true' });
         
         if (!response || response.error || !Array.isArray(response.files)) {
             throw new Error(response && response.error ? response.error : 'Invalid files response');
@@ -973,7 +1110,7 @@ async function getAllFiles() {
         while (hasMore) {
             updateStatus(`Fetching page ${page}...`);
             console.log(`[Files] Fetching page ${page}...`);
-            const response = await window.electronAPI.apiGet('files', { page: page, page_size: 200 });
+            const response = await makeAuthRequest('/files', 'GET', { page: String(page), page_size: '200' });
             
             if (!response || response.error || !Array.isArray(response.files)) {
                 throw new Error(response && response.error ? response.error : 'Invalid files response');
@@ -2016,6 +2153,16 @@ async function loadSettings() {
         elements.maxTransfers.value = currentSettings.maxTransfers;
         elements.logLevel.value = currentSettings.logLevel;
         elements.serverUrl.value = currentSettings.serverUrl;
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.checked = !!currentSettings.crossfadeEnabled;
+        }
+        const cfDuration = typeof currentSettings.crossfadeDuration === 'number' ? currentSettings.crossfadeDuration : 5;
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.value = String(cfDuration);
+        }
+        if (elements.crossfadeDurationValue) {
+            elements.crossfadeDurationValue.textContent = cfDuration + 's';
+        }
         
         await loadStoragePathInfo();
         
@@ -2377,7 +2524,9 @@ async function saveSettings() {
             serverUrl: elements.serverUrl.value,
             selectedFolders: Array.from(selectedFolders),
             customStoragePath: latest.customStoragePath,
-            lastActiveTab: currentTab
+            lastActiveTab: currentTab,
+            crossfadeEnabled: elements.crossfadeEnabled ? elements.crossfadeEnabled.checked : !!latest.crossfadeEnabled,
+            crossfadeDuration: elements.crossfadeDuration ? parseInt(elements.crossfadeDuration.value) : (latest.crossfadeDuration || 5)
         };
         
         await window.electronAPI.saveSettings(settings);
@@ -2407,6 +2556,15 @@ async function resetSettings() {
         elements.maxTransfers.value = '3';
         elements.logLevel.value = 'info';
         elements.serverUrl.value = 'https://m.juicewrldapi.com';
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.checked = false;
+        }
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.value = '5';
+        }
+        if (elements.crossfadeDurationValue) {
+            elements.crossfadeDurationValue.textContent = '5s';
+        }
         
         selectedFolders.clear();
         
@@ -2420,7 +2578,9 @@ async function resetSettings() {
             logLevel: 'info',
             serverUrl: 'https://m.juicewrldapi.com',
             selectedFolders: [],
-            lastActiveTab: 'overview'
+            lastActiveTab: 'overview',
+            crossfadeEnabled: false,
+            crossfadeDuration: 5
         };
         
         try {
@@ -2524,7 +2684,7 @@ async function updateStats() {
     try {
         console.log('[Stats] Updating stats...');
         
-        const response = await window.electronAPI.apiGet('status/');
+        const response = await makeAuthRequest('/status/', 'GET');
         console.log('[Stats] Server response:', response);
         if (response && !response.error && typeof response.total_files !== 'undefined') {
             elements.totalFiles.textContent = String(response.total_files);
@@ -2586,11 +2746,23 @@ function showToast(type, message) {
     }, 3000);
 }
 
+let lastNotification = { title: null, body: null, time: 0 };
+const NOTIFICATION_DEBOUNCE_MS = 2000;
+
 function showDesktopNotification(title, body) {
     try {
         if (!('Notification' in window)) return;
         const isEnabled = !!(currentSettings && currentSettings.showTrayNotifications);
         if (!isEnabled) return;
+        
+        const now = Date.now();
+        if (lastNotification.title === title && lastNotification.body === body && 
+            (now - lastNotification.time) < NOTIFICATION_DEBOUNCE_MS) {
+            return;
+        }
+        
+        lastNotification = { title, body, time: now };
+        
         if (Notification.permission === 'granted') {
             new Notification(title, { body });
         } else if (Notification.permission !== 'denied') {
@@ -3078,7 +3250,6 @@ async function startSyncOptimized() {
     updateSyncStatus('syncing');
     showProgress();
     updateStatus('Starting sync...');
-    showDesktopNotification('Sync started', 'Sync & download has begun');
     
     try {
         const progressContainer = document.createElement('div');
@@ -3155,10 +3326,14 @@ async function startSyncOptimized() {
                     try { await window.electronAPI.appendJobLog(`[COMPLETE] ${processedTotal} processed (d:${d} u:${u} s:${s} e:${e} del:${Number(data.deleted||0)})`) } catch (_) {}
                     if (e > 0) {
                         showToast('warning', `Sync completed with ${e} errors. Processed ${processedTotal} files.`);
-                        showDesktopNotification('Sync completed with errors', `${processedTotal} processed, ${e} errors`);
+                        if (d > 0) {
+                            showDesktopNotification('Sync completed with errors', `${processedTotal} processed, ${e} errors`);
+                        }
                     } else {
                         showToast('success', `Sync completed successfully! Processed ${processedTotal} files.`);
-                        showDesktopNotification('Sync completed', `${processedTotal} files processed successfully`);
+                        if (d > 0) {
+                            showDesktopNotification('Sync completed', `${processedTotal} files processed successfully`);
+                        }
                     }
                     break;
                     
@@ -3700,34 +3875,32 @@ async function makeAuthRequest(endpoint, method = 'GET', data = null, customToke
     try {
         const base = await getServerUrl();
         const url = `${base}${endpoint}`;
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-
-        if (customToken) {
-            headers['Authorization'] = `Token ${customToken}`;
-        } else if (authState.token) {
-            headers['Authorization'] = `Token ${authState.token}`;
+        const headers = { 'Content-Type': 'application/json' };
+        if (customToken) headers['Authorization'] = `Token ${customToken}`;
+        else if (authState.token) headers['Authorization'] = `Token ${authState.token}`;
+        const params = data && method === 'GET' ? ('?' + new URLSearchParams(data).toString()) : '';
+        const controller = new AbortController();
+        const timeoutMs = 8000;
+        const to = setTimeout(() => { try { controller.abort(); } catch(_) {} }, timeoutMs);
+        try {
+            const res = await fetch(url + params, {
+                method,
+                headers,
+                body: method !== 'GET' && data ? JSON.stringify(data) : null,
+                signal: controller.signal
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) return { error: json.error || json.message || `HTTP ${res.status}` };
+            return json;
+        } catch (e) {
+            if (e && (e.name === 'AbortError' || String(e).includes('aborted'))) {
+                return { error: 'Request timed out' };
+            }
+            return { error: (e && e.message) || 'Request failed' };
+        } finally {
+            clearTimeout(to);
         }
-
-        let response;
-        const params = data ? '?' + new URLSearchParams(data).toString() : '';
-        const options = {
-            method: method,
-            headers: headers,
-            body: (method !== 'GET' && data) ? JSON.stringify(data) : null
-        };
-        
-        response = await fetch(url + (method === 'GET' ? params : ''), options);
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || errorData.message || `HTTP ${response.status}`);
-        }
-        response = await response.json();
-
-        return response;
     } catch (error) {
-        console.error('[Account] API request failed:', error);
         return { error: error.message || 'Request failed' };
     }
 }

@@ -11,7 +11,7 @@ let playlists = []
 let queue = []
 let currentIndex = -1
 let currentView = 'home'
-let repeatAll = false
+let repeatMode = 0
 let queuePanelEl = null
 let historyPanelEl = null
 let roomsPanelEl = null
@@ -36,6 +36,12 @@ let collectionsRebuildTimer = null
 let collectionsCacheKey = null
 let nowPlayingUpdateInterval = null
 let authState = null
+let favorites = new Set()
+let crossfadeEnabled = false
+let crossfadeDuration = 0
+let crossfadeActive = false
+let crossfadeInterval = null
+let crossfadeAudio = null
 
 function computeCollectionsCacheKey(){
   let maxM = 0
@@ -112,7 +118,9 @@ const els = {
   seek: document.getElementById('seekBar'),
   currentTime: document.getElementById('currentTime'),
   duration: document.getElementById('duration'),
-  volume: document.getElementById('volumeBar')
+  volume: document.getElementById('volumeBar'),
+  favoriteBtn: document.getElementById('favoriteBtn'),
+  repeatBtn: document.getElementById('repeatBtn')
 }
 
 function formatTime(sec){
@@ -184,70 +192,111 @@ function guessTags(filename, localPath){
   return { artist, title, album }
 }
 
+function processFile(f){
+  const ext = (f.filename||'').toLowerCase().split('.').pop()
+  const isVideo = ['mp4','webm','mkv','mov'].includes(ext)
+  const isAudio = ['mp3','wav','flac','aac','m4a','ogg'].includes(ext)
+  const tags = {
+    artist: (f.displayArtist || null) || guessTags(f.filename||'Unknown', f.localPath).artist,
+    title: (f.displayTitle || null) || guessTags(f.filename||'Unknown', f.localPath).title,
+    album: (f.displayAlbum || null) || guessTags(f.filename||'Unknown', f.localPath).album
+  }
+  return {
+    title: tags.title || f.filename || 'Unknown',
+    path: f.filepath,
+    localPath: f.localPath,
+    isVideo,
+    isAudio,
+    album: tags.album,
+    artist: tags.artist,
+    year: null,
+    genre: null,
+    albumArtist: null,
+    track: null,
+    thumbnail: null,
+    mtimeMs: f.mtimeMs
+  }
+}
+
 async function loadLibrary(){
   const res = await window.electronAPI.getLocalFiles()
   const files = (res&&res.files)||[]
   
-  libraryItems = files.map(f=>{
-    const ext = (f.filename||'').toLowerCase().split('.').pop()
-    const isVideo = ['mp4','webm','mkv','mov'].includes(ext)
-    const isAudio = ['mp3','wav','flac','aac','m4a','ogg'].includes(ext)
-    const tags = {
-      artist: (f.displayArtist || null) || guessTags(f.filename||'Unknown', f.localPath).artist,
-      title: (f.displayTitle || null) || guessTags(f.filename||'Unknown', f.localPath).title,
-      album: (f.displayAlbum || null) || guessTags(f.filename||'Unknown', f.localPath).album
-    }
-    return {
-      title: tags.title || f.filename || 'Unknown',
-      path: f.filepath,
-      localPath: f.localPath,
-      isVideo,
-      isAudio,
-      album: tags.album,
-      artist: tags.artist,
-      year: null,
-      genre: null,
-      albumArtist: null,
-      track: null,
-      thumbnail: null,
-      mtimeMs: f.mtimeMs
-    }
-  })
+  const INITIAL_BATCH = 150
+  const CHUNK_SIZE = 100
   
-  libraryItems = libraryItems.filter(it=>it.isAudio||it.isVideo)
-  filtered = [...libraryItems]
+  libraryItems = []
+  filtered = []
   albums = new Map()
   artists = new Map()
-  if(!tryLoadCollectionsCache()){
-    for(const item of libraryItems){
-      const aKey = (item.album && String(item.album).trim()) ? String(item.album).trim() : 'Unknown Album'
-      const rKey = (item.albumArtist && String(item.albumArtist).trim()) ? String(item.albumArtist).trim() : (item.artist||'Unknown Artist')
-      if(!albums.has(aKey)) albums.set(aKey, [])
-      if(!artists.has(rKey)) artists.set(rKey, [])
-      albums.get(aKey).push(item)
-      artists.get(rKey).push(item)
+  
+  const initialFiles = files.slice(0, INITIAL_BATCH)
+  for(const f of initialFiles){
+    const item = processFile(f)
+    if(item.isAudio || item.isVideo){
+      libraryItems.push(item)
     }
-    saveCollectionsCache()
   }
+  filtered = [...libraryItems]
+  render()
   
-  await loadPlaylists()
-  try{
-    const h = await window.electronAPI.getPlayHistory()
-    if(h && h.success && Array.isArray(h.history)) playHistory = h.history
-  }catch(_){}
+  ;(async()=>{
+    let processed = INITIAL_BATCH
+    while(processed < files.length){
+      const chunk = files.slice(processed, processed + CHUNK_SIZE)
+      const newItems = []
+      for(const f of chunk){
+        const item = processFile(f)
+        if(item.isAudio || item.isVideo){
+          libraryItems.push(item)
+          newItems.push(item)
+        }
+      }
+      filtered = [...libraryItems]
+      processed += CHUNK_SIZE
+      if(newItems.length > 0 && (currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists' || currentView==='favorites')){
+        try{ scheduleRerender() }catch(_){}
+      }
+      await new Promise(r=>setTimeout(r, 10))
+    }
+    
+    if(!tryLoadCollectionsCache()){
+      for(const item of libraryItems){
+        const aKey = (item.album && String(item.album).trim()) ? String(item.album).trim() : 'Unknown Album'
+        const rKey = (item.albumArtist && String(item.albumArtist).trim()) ? String(item.albumArtist).trim() : (item.artist||'Unknown Artist')
+        if(!albums.has(aKey)) albums.set(aKey, [])
+        if(!artists.has(rKey)) artists.set(rKey, [])
+        albums.get(aKey).push(item)
+        artists.get(rKey).push(item)
+      }
+      saveCollectionsCache()
+    }
+    await loadPlaylists()
+    try{
+      const h = await window.electronAPI.getPlayHistory()
+      if(h && h.success && Array.isArray(h.history)) playHistory = h.history
+    }catch(_){}
+    try{ if(currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists') scheduleRerender() }catch(_){}
+  })()
   
-  await (async function hydrateThumbnailsFromCache(){
-    const items = libraryItems
+  ;(async function hydrateThumbnailsFromCache(){
     const limit = Math.max(4, Math.min(16, (navigator.hardwareConcurrency||8)))
     let idx = 0
     async function run(){
       while(true){
         const i = idx++
-        if(i >= items.length) return
-        const it = items[i]
+        if(i >= libraryItems.length) {
+          await new Promise(r=>setTimeout(r, 100))
+          if(i >= libraryItems.length) return
+        }
+        const it = libraryItems[i]
+        if(!it) continue
         try{
           const p = await window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs)
-          if(p) it.thumbnail = p
+          if(p){
+            it.thumbnail = p
+            try{ scheduleCardUpdate() }catch(_){}
+          }
         }catch(_){ }
       }
     }
@@ -255,7 +304,6 @@ async function loadLibrary(){
     for(let i=0;i<limit;i++) workers.push(run())
     await Promise.all(workers)
   })()
-  render()
 }
 
 function rebuildCollections(){
@@ -335,14 +383,14 @@ let cachedCards = null
 let lastView = null
 
 function updateExistingCards(){
-  if(currentView === 'albums' || currentView === 'home' || currentView === 'music' || currentView === 'videos'){
+  if(currentView === 'albums' || currentView === 'home' || currentView === 'music' || currentView === 'videos' || currentView === 'favorites' || currentView === 'artists'){
     if(!cachedCards || lastView !== currentView){
       cachedCards = document.querySelectorAll('.card')
       lastView = currentView
     }
     
     let updated = 0
-    const maxUpdates = 20 // Limit updates per frame to prevent blocking
+    const maxUpdates = 20
     
     for(const card of cachedCards){
       if(updated >= maxUpdates) break
@@ -400,7 +448,8 @@ function setNavActive(key){
 function render(){
   setNavActive(currentView)
   inDetailView = false
-  cachedCards = null // Clear cache on view change
+  cachedCards = null
+  try{ restorePlaybarState() }catch(_){ }
   if(currentView==='home') return renderHome()
   if(currentView==='search') return renderSearch()
   if(currentView==='albums') return renderAlbums()
@@ -409,6 +458,7 @@ function render(){
   if(currentView==='folders') return renderFolders()
   if(currentView==='music') return renderMusic()
   if(currentView==='videos') return renderVideos()
+  if(currentView==='favorites') return renderFavorites()
   return renderMusic()
 }
 
@@ -656,7 +706,8 @@ function renderHome(){
   els.library.style.scrollBehavior = ''
   const title1 = document.createElement('div'); title1.className='section-title'; title1.textContent='Recently Added'
   const row1 = document.createElement('div'); row1.className='row'
-  const recent = [...libraryItems].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24)
+  const sampleSize = Math.min(100, libraryItems.length)
+  const recent = sampleSize > 0 ? [...libraryItems.slice(0, sampleSize)].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24) : []
   els.library.appendChild(title1)
   els.library.appendChild(row1)
   let i1 = 0
@@ -666,6 +717,24 @@ function renderHome(){
     if(i1<recent.length) requestAnimationFrame(fillRecent)
   }
   fillRecent()
+  
+  if(libraryItems.length > sampleSize){
+    requestAnimationFrame(()=>{
+      setTimeout(()=>{
+        const fullRecent = [...libraryItems].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24)
+        if(fullRecent.length !== recent.length || fullRecent.some((item, idx) => item !== recent[idx])){
+          row1.innerHTML = ''
+          i1 = 0
+          function fillRecentUpdated(){
+            const end = Math.min(fullRecent.length, i1+8)
+            for(; i1<end; i1++) row1.appendChild(buildCard(fullRecent[i1], fullRecent, { playScope: 'single' }))
+            if(i1<fullRecent.length) requestAnimationFrame(fillRecentUpdated)
+          }
+          fillRecentUpdated()
+        }
+      }, 0)
+    })
+  }
 
   const title2 = document.createElement('div'); title2.className='section-title'; title2.textContent='Albums'
   const row2 = document.createElement('div'); row2.className='row grid-compact'
@@ -720,6 +789,7 @@ function buildCard(it, list, options){
   const placeIcon = ()=>{ thumb.innerHTML = it.isVideo?'<i class="fas fa-film"></i>':'<i class="fas fa-music"></i>' }
   placeIcon()
   
+  
   const updateThumbnail = () => {
     if(it.thumbnail && typeof it.thumbnail === 'string'){
       const currentImg = thumb.querySelector('img')
@@ -761,7 +831,7 @@ function buildCard(it, list, options){
         const start = list.indexOf(it)
         queue = list.slice(start)
       }
-      repeatAll = false
+      repeatMode = 0
       playIndex(0)
       refreshQueuePanel()
     }
@@ -777,7 +847,9 @@ function buildCard(it, list, options){
   }
   card.oncontextmenu = (e)=>{
     e.preventDefault();
-    openContextMenu(e.clientX, e.clientY, it, list)
+    let pIndex = null
+    if(options && typeof options.playlistIndex === 'number') pIndex = options.playlistIndex
+    openContextMenu(e.clientX, e.clientY, it, list, pIndex)
   }
   return card
 }
@@ -842,6 +914,7 @@ async function pumpEnhancers(){
             if(th){ 
               thumbCache.set(task.key, th)
               task.item.thumbnail = th
+              try{ if(currentIndex>=0 && queue[currentIndex] && queue[currentIndex].localPath===task.item.localPath){ updateNowPlaying(task.item) } }catch(_){ }
             }
           }catch(_){ }
         }
@@ -911,6 +984,10 @@ function extractThumbnail(filePath, isVideo, albumArtData = null, mtimeMs = null
       if(existing){ resolve(existing); return }
     }catch(_){ }
     if(isVideo){
+      try{
+        const gen = await window.electronAPI.generateVideoThumbnail(filePath, mtimeMs)
+        if(gen && gen.success && typeof gen.url === 'string' && gen.url){ resolve(gen.url); return }
+      }catch(_){ }
       const video = document.createElement('video')
       video.crossOrigin = 'anonymous'
       video.preload = 'metadata'
@@ -998,14 +1075,14 @@ function renderCollectionDetail(name, items, kind){
   const actions = document.createElement('div'); actions.className='collection-actions';
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   playAll.onclick = ()=>{ 
-    const doIt = ()=>{ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with this collection. Continue?', onConfirm: doIt }) }
     else doIt()
   }
   actions.appendChild(playAll)
   const shuffle = document.createElement('div'); shuffle.className='pill'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
   shuffle.onclick = ()=>{ 
-    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatMode=0; playIndex(0); refreshQueuePanel() }
     if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with a shuffled order. Continue?', onConfirm: doIt }) }
     else doIt()
   }
@@ -1026,18 +1103,70 @@ function renderCollectionDetail(name, items, kind){
 
 function renderSearch(){
   const q = (els.search.value||'').toLowerCase().trim()
-  const songMatches = libraryItems.filter(it=> it.isAudio && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q)))
-  const videoMatches = libraryItems.filter(it=> it.isVideo && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q)))
-  const albumEntries = Array.from(albums.entries())
-  const albumMatches = albumEntries.filter(([name, items])=> String(name||'').toLowerCase().includes(q))
-  const artistEntries = Array.from(artists.entries())
-  const artistMatches = artistEntries.filter(([name, items])=> String(name||'').toLowerCase().includes(q))
-  const playlistMatches = (playlists||[]).filter(pl=> String(pl.name||'').toLowerCase().includes(q))
-
   teardownVirtualizer()
   els.library.innerHTML = ''
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
+  
+  if(!q){
+    return
+  }
+  
+  const songMatches = []
+  const videoMatches = []
+  const albumMatches = []
+  const artistMatches = []
+  const playlistMatches = []
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const chunkSize = 200
+      let libIdx = 0
+      function filterLibrary(){
+        const end = Math.min(libIdx + chunkSize, libraryItems.length)
+        for(; libIdx < end; libIdx++){
+          const it = libraryItems[libIdx]
+          if(it.isAudio && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q))){
+            songMatches.push(it)
+          }
+          if(it.isVideo && ((it.title||'').toLowerCase().includes(q) || (it.artist||'').toLowerCase().includes(q) || (it.album||'').toLowerCase().includes(q))){
+            videoMatches.push(it)
+          }
+        }
+        if(libIdx < libraryItems.length){
+          requestAnimationFrame(filterLibrary)
+        } else {
+          const albumEntries = Array.from(albums.entries())
+          for(const [name, items] of albumEntries){
+            if(String(name||'').toLowerCase().includes(q)){
+              albumMatches.push([name, items])
+            }
+          }
+          const artistEntries = Array.from(artists.entries())
+          for(const [name, items] of artistEntries){
+            if(String(name||'').toLowerCase().includes(q)){
+              artistMatches.push([name, items])
+            }
+          }
+          for(const pl of (playlists||[])){
+            if(String(pl.name||'').toLowerCase().includes(q)){
+              playlistMatches.push(pl)
+            }
+          }
+          renderSearchResults(songMatches, videoMatches, albumMatches, artistMatches, playlistMatches)
+        }
+      }
+      filterLibrary()
+    }, 0)
+  })
+  
+  const loadingMsg = document.createElement('div')
+  loadingMsg.className = 'section-title'
+  loadingMsg.textContent = 'Searching...'
+  els.library.appendChild(loadingMsg)
+  
+  function renderSearchResults(songMatches, videoMatches, albumMatches, artistMatches, playlistMatches){
+    els.library.innerHTML = ''
 
   const addSection = (titleText, contentBuilder) => {
     const has = contentBuilder()
@@ -1122,12 +1251,80 @@ function renderSearch(){
     })
     return true
   })
+  }
 }
 
-function renderMusic(){ renderIncrementalGrid(libraryItems.filter(i=>i.isAudio), { playScope:'single' }) }
+function renderMusic(){
+  teardownVirtualizer()
+  els.library.innerHTML = ''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent='All Music'
+  const grid = document.createElement('div'); grid.className='row'
+  els.library.appendChild(header); els.library.appendChild(grid)
+  
+  const audioItems = []
+  let idx = 0
+  function filterAndRender(){
+    const chunk = 200
+    const end = Math.min(idx + chunk, libraryItems.length)
+    for(; idx < end; idx++){
+      if(libraryItems[idx].isAudio){
+        audioItems.push(libraryItems[idx])
+      }
+    }
+    if(idx < libraryItems.length){
+      requestAnimationFrame(filterAndRender)
+    } else {
+      renderIncrementalGrid(audioItems, { playScope:'single' })
+    }
+  }
+  filterAndRender()
+}
+function renderFavorites(){
+  teardownVirtualizer()
+  els.library.innerHTML = ''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent='Favorites'
+  const actions = document.createElement('div'); actions.className='collection-actions'
+  const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
+  const shuffle = document.createElement('div'); shuffle.className='pill secondary'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
+  actions.appendChild(playAll); actions.appendChild(shuffle)
+  const grid = document.createElement('div'); grid.className='row'
+  els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
+  
+  const items = []
+  let filterIdx = 0
+  function filterFavorites(){
+    const chunk = 200
+    const end = Math.min(filterIdx + chunk, libraryItems.length)
+    for(; filterIdx < end; filterIdx++){
+      if(favorites.has(libraryItems[filterIdx].localPath)){
+        items.push(libraryItems[filterIdx])
+      }
+    }
+    if(filterIdx < libraryItems.length){
+      requestAnimationFrame(filterFavorites)
+    } else {
+      playAll.onclick = (e)=>{ e.stopPropagation(); if(items.length){ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() } }
+      shuffle.onclick = (e)=>{ e.stopPropagation(); if(items.length){ const arr=[...items]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatMode=0; playIndex(0); refreshQueuePanel() } }
+      const renderChunk = 60
+      let i = 0
+      function appendChunk(){
+        const end = Math.min(items.length, i+renderChunk)
+        for(; i<end; i++){
+          grid.appendChild(buildCard(items[i], items, { playScope: 'single' }))
+        }
+        if(i < items.length) requestAnimationFrame(appendChunk)
+      }
+      appendChunk()
+    }
+  }
+  filterFavorites()
+}
 function renderVideos(){
   teardownVirtualizer()
-  const videos = libraryItems.filter(i=>i.isVideo)
   els.library.innerHTML = ''
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
@@ -1135,86 +1332,128 @@ function renderVideos(){
   const actions = document.createElement('div'); actions.className='collection-actions'
   const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
   const shuffle = document.createElement('div'); shuffle.className='pill secondary'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
-  playAll.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ queue=[...videos]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
-  shuffle.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ const arr=[...videos]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
   actions.appendChild(playAll); actions.appendChild(shuffle)
   const grid = document.createElement('div'); grid.className='row'
   els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
-  const chunk = 60
-  let i = 0
-  function appendChunk(){
-    const end = Math.min(videos.length, i+chunk)
-    for(; i<end; i++){
-      grid.appendChild(buildCard(videos[i], videos, { playScope: 'single' }))
+  
+  const videos = []
+  let filterIdx = 0
+  function filterVideos(){
+    const chunk = 200
+    const end = Math.min(filterIdx + chunk, libraryItems.length)
+    for(; filterIdx < end; filterIdx++){
+      if(libraryItems[filterIdx].isVideo){
+        videos.push(libraryItems[filterIdx])
+      }
     }
-    if(i < videos.length) requestAnimationFrame(appendChunk)
+    if(filterIdx < libraryItems.length){
+      requestAnimationFrame(filterVideos)
+    } else {
+      playAll.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ queue=[...videos]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+      shuffle.onclick = (e)=>{ e.stopPropagation(); if(videos.length){ const arr=[...videos]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+      const renderChunk = 60
+      let i = 0
+      function appendChunk(){
+        const end = Math.min(videos.length, i+renderChunk)
+        for(; i<end; i++){
+          grid.appendChild(buildCard(videos[i], videos, { playScope: 'single' }))
+        }
+        if(i < videos.length) requestAnimationFrame(appendChunk)
+      }
+      appendChunk()
+    }
   }
-  appendChunk()
+  filterVideos()
 }
 
 function renderAlbums(){
   teardownVirtualizer()
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
-  const entries = Array.from(albums.entries()).filter(([name, items]) => Array.isArray(items) && items.length > 0)
-  entries.sort(([aName],[bName]) => {
-    const a = String(aName)
-    const b = String(bName)
-    if (a === 'Unknown Album' && b !== 'Unknown Album') return 1
-    if (b === 'Unknown Album' && a !== 'Unknown Album') return -1
-    return a.localeCompare(b)
-  })
-  if(entries.length > 60){
-    renderIncrementalCollections(entries, 'album')
-    return
-  }
   els.library.innerHTML = ''
   const title = document.createElement('div'); title.className='section-title'; title.textContent='All Albums'
   const grid = document.createElement('div'); grid.className='row grid-compact'
   els.library.appendChild(title); els.library.appendChild(grid)
-  let i=0
-  function appendAlbums(){
-    const frag = document.createDocumentFragment()
-    const end = Math.min(i+60, entries.length)
-    for(; i<end; i++){
-      const [name, items] = entries[i]
-      frag.appendChild(buildCollectionCard(name, items, 'album'))
-    }
-    grid.appendChild(frag)
-    if(i<entries.length) requestAnimationFrame(appendAlbums)
-  }
-  appendAlbums()
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const allEntries = Array.from(albums.entries())
+      const entries = []
+      let filterIdx = 0
+      function filterEntries(){
+        const chunk = 100
+        const end = Math.min(filterIdx + chunk, allEntries.length)
+        for(; filterIdx < end; filterIdx++){
+          const [name, items] = allEntries[filterIdx]
+          if(Array.isArray(items) && items.length > 0){
+            entries.push([name, items])
+          }
+        }
+        if(filterIdx < allEntries.length){
+          requestAnimationFrame(filterEntries)
+        } else {
+          entries.sort(([aName],[bName]) => {
+            const a = String(aName)
+            const b = String(bName)
+            if (a === 'Unknown Album' && b !== 'Unknown Album') return 1
+            if (b === 'Unknown Album' && a !== 'Unknown Album') return -1
+            return a.localeCompare(b)
+          })
+          if(entries.length > 60){
+            renderIncrementalCollections(entries, 'album')
+            return
+          }
+          let i=0
+          function appendAlbums(){
+            const frag = document.createDocumentFragment()
+            const end = Math.min(i+60, entries.length)
+            for(; i<end; i++){
+              const [name, items] = entries[i]
+              frag.appendChild(buildCollectionCard(name, items, 'album'))
+            }
+            grid.appendChild(frag)
+            if(i<entries.length) requestAnimationFrame(appendAlbums)
+          }
+          appendAlbums()
+        }
+      }
+      filterEntries()
+    }, 0)
+  })
 }
 
 function renderArtists(){
   teardownVirtualizer()
   els.library.style.display = ''
   els.library.style.scrollBehavior = ''
-  const names = Array.from(artists.keys()).sort((a,b)=>String(a).localeCompare(String(b)))
-  const entries = names.map(n=>[n, artists.get(n)||[]])
-  if(entries.length > 60){
-    renderIncrementalCollections(entries, 'artist')
-    return
-  }
-  const draw = () => {
-    els.library.innerHTML = ''
-    const title = document.createElement('div'); title.className='section-title'; title.textContent='All Artists'
-    const grid = document.createElement('div'); grid.className='row grid-compact'
-    els.library.appendChild(title); els.library.appendChild(grid)
-    let i=0
-    function appendArtists(){
-      const frag = document.createDocumentFragment()
-      const end = Math.min(i+60, entries.length)
-      for(; i<end; i++){
-        const [name, items] = entries[i]
-        frag.appendChild(buildCollectionCard(name, items, 'artist'))
+  els.library.innerHTML = ''
+  const title = document.createElement('div'); title.className='section-title'; title.textContent='All Artists'
+  const grid = document.createElement('div'); grid.className='row grid-compact'
+  els.library.appendChild(title); els.library.appendChild(grid)
+  
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      const names = Array.from(artists.keys())
+      names.sort((a,b)=>String(a).localeCompare(String(b)))
+      const entries = names.map(n=>[n, artists.get(n)||[]])
+      if(entries.length > 60){
+        renderIncrementalCollections(entries, 'artist')
+        return
       }
-      grid.appendChild(frag)
-      if(i<entries.length) requestAnimationFrame(appendArtists)
-    }
-    appendArtists()
-  }
-  draw()
+      let i=0
+      function appendArtists(){
+        const frag = document.createDocumentFragment()
+        const end = Math.min(i+60, entries.length)
+        for(; i<end; i++){
+          const [name, items] = entries[i]
+          frag.appendChild(buildCollectionCard(name, items, 'artist'))
+        }
+        grid.appendChild(frag)
+        if(i<entries.length) requestAnimationFrame(appendArtists)
+      }
+      appendArtists()
+    }, 0)
+  })
 }
 
 function renderPlaylists(){
@@ -1254,13 +1493,51 @@ function renderPlaylists(){
   }
   playlists.forEach((pl, idx)=>{
     const card = buildCollectionCard(pl.name, pl.items||[], 'album')
-    card.onclick = ()=> renderCollectionDetail(pl.name, pl.items||[], 'album')
+    card.onclick = ()=> renderPlaylistDetail(idx)
     card.oncontextmenu = (e)=>{
       e.preventDefault()
       openPlaylistContextMenu(e.clientX, e.clientY, idx)
     }
     grid.appendChild(card)
   })
+}
+
+function renderPlaylistDetail(playlistIndex){
+  const pl = playlists[playlistIndex]
+  if(!pl) return
+  const items = pl.items || []
+  inDetailView = true
+  els.library.innerHTML=''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent = `Playlist: ${pl.name}`
+  const actions = document.createElement('div'); actions.className='collection-actions';
+  const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
+  playAll.onclick = ()=>{
+    const doIt = ()=>{ queue=[...items]; repeatMode=0; playIndex(0); refreshQueuePanel() }
+    if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with this playlist. Continue?', onConfirm: doIt }) }
+    else doIt()
+  }
+  actions.appendChild(playAll)
+  const shuffle = document.createElement('div'); shuffle.className='pill'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
+  shuffle.onclick = ()=>{
+    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatMode=0; playIndex(0); refreshQueuePanel() }
+    if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with a shuffled order. Continue?', onConfirm: doIt }) }
+    else doIt()
+  }
+  actions.appendChild(shuffle)
+  const grid = document.createElement('div'); grid.className='row collection-grid'
+  els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
+  const chunk = 60
+  let i=0
+  function appendChunk(){
+    const frag = document.createDocumentFragment()
+    const end = Math.min(i+chunk, items.length)
+    for(; i<end; i++) frag.appendChild(buildCard(items[i], items, { playScope: 'single', playlistIndex }))
+    grid.appendChild(frag)
+    if(i<items.length) requestAnimationFrame(appendChunk)
+  }
+  appendChunk()
 }
 
 function renderFolders(){
@@ -1326,9 +1603,141 @@ async function savePlaylists(){
     if(!result || !result.success) {
       console.error('[Playlists] Failed to save:', result?.error)
     }
+    try{ if(authState && authState.token){ await pushCollectionsToServer() } }catch(_){ }
   } catch (error) {
     console.error('[Playlists] Error saving playlists:', error)
   }
+}
+
+async function loadFavorites(){
+  try{
+    const r = await window.electronAPI.getFavorites()
+    const arr = r && Array.isArray(r.favorites) ? r.favorites : []
+    favorites = new Set(arr)
+  }catch(_){ }
+}
+
+async function saveFavorites(){
+  try{
+    await window.electronAPI.saveFavorites(Array.from(favorites))
+    try{ if(authState && authState.token){ await pushCollectionsToServer() } }catch(_){ }
+  }catch(_){ }
+}
+
+function buildPathMaps(){
+  const byLocal = new Map()
+  const byPath = new Map()
+  for(const it of libraryItems){
+    if(it.localPath) byLocal.set(it.localPath, it.path || it.filepath || '')
+    if(it.path) byPath.set(it.path, it.localPath || '')
+  }
+  return { byLocal, byPath }
+}
+
+function favoritesToFilepaths(){
+  const out = []
+  for(const it of libraryItems){
+    const p = it.path || ''
+    const lp = it.localPath || ''
+    if((lp && favorites.has(lp)) || (p && favorites.has(p))){
+      if(p) out.push(p)
+    }
+  }
+  return Array.from(new Set(out))
+}
+
+function playlistsToServer(){
+  const out = []
+  for(const pl of (playlists||[])){
+    const items = Array.isArray(pl.items) ? pl.items : []
+    const fps = []
+    for(const it of items){
+      const p = it && (it.path || it.filepath) ? (it.path || it.filepath) : ''
+      if(p) fps.push(p)
+    }
+    out.push({ id: typeof pl.id==='number'?pl.id:undefined, name: String(pl.name||'').trim() || 'Untitled', items: Array.from(new Set(fps)) })
+  }
+  return out
+}
+
+function applyServerFavoritesToLocal(filepaths){
+  const byPath = new Map()
+  const byLocalPath = new Map()
+  for(const it of libraryItems){
+    if(it.path){
+      byPath.set(it.path, it.localPath || '')
+      if(it.localPath) byLocalPath.set(it.localPath, it.path)
+    }
+  }
+  const serverFavSet = new Set(Array.isArray(filepaths) ? filepaths : [])
+  const newFavorites = new Set()
+  
+  for(const fp of Array.isArray(filepaths)?filepaths:[]){
+    const lp = byPath.get(fp)
+    if(lp){
+      newFavorites.add(lp)
+    }
+  }
+  
+  for(const localPath of favorites){
+    const serverPath = byLocalPath.get(localPath)
+    if(!serverPath){
+      newFavorites.add(localPath)
+    } else if(serverFavSet.has(serverPath)){
+      newFavorites.add(localPath)
+    }
+  }
+  
+  favorites = newFavorites
+}
+
+function applyServerPlaylistsToLocal(serverPlaylists){
+  const byPath = new Map()
+  for(const it of libraryItems){
+    if(it.path) byPath.set(it.path, it)
+  }
+  const out = []
+  for(const pl of Array.isArray(serverPlaylists)?serverPlaylists:[]){
+    const items = []
+    for(const fp of Array.isArray(pl.items)?pl.items:[]){
+      const it = byPath.get(fp)
+      if(it) items.push(it)
+    }
+    out.push({ id: pl.id, name: pl.name, items })
+  }
+  playlists = out
+}
+
+async function pushCollectionsToServer(){
+  if(!authState || !authState.token) return
+  const payload = { favorites: favoritesToFilepaths(), playlists: playlistsToServer() }
+  const res = await makeAuthRequest('/user/collections', 'PUT', payload)
+  return res
+}
+
+async function syncCollectionsWithServer(){
+  try{
+    await loadAuthState()
+    if(!authState || !authState.token) return
+    const res = await makeAuthRequest('/user/collections', 'GET')
+    if(res && !res.error){
+      const serverFavs = Array.isArray(res.favorites)?res.favorites:[]
+      const serverPls = Array.isArray(res.playlists)?res.playlists:[]
+      const localFavs = favoritesToFilepaths()
+      const localPls = playlistsToServer()
+      const serverEmpty = serverFavs.length===0 && serverPls.length===0
+      const localEmpty = localFavs.length===0 && localPls.length===0
+      if(serverEmpty && !localEmpty){
+        await pushCollectionsToServer()
+      }else if(!serverEmpty){
+        applyServerFavoritesToLocal(serverFavs)
+        await saveFavorites()
+        applyServerPlaylistsToLocal(serverPls)
+        await savePlaylists()
+        if(currentView==='favorites' || currentView==='playlists'){ render() }
+      }
+    }
+  }catch(_){ }
 }
 
 
@@ -1346,16 +1755,93 @@ function updateNowPlaying(meta){
   } else {
     els.artwork.src = 'assets/icon_128x128.png'
   }
+  try{ document.title = `${meta?.title||'Player'} - JuiceWRLD API` }catch(_){ }
+  try{ const t = document.querySelector('.titlebar-title'); if(t) t.textContent = `${meta?.title||'Player'} - JuiceWRLD API` }catch(_){ }
+  try{ setMediaSessionMetadata(meta) }catch(_){ }
+  try{ updateFavoriteBtnUI() }catch(_){ }
+  try{ updateVisualizer() }catch(_){ }
+}
+
+async function updateVisualizer(){
+  try{
+    const state = await window.electronAPI.getVisualizerState()
+    if(!state || !state.isOpen) return
+    
+    const media = getMedia()
+    const item = currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null
+    
+    if(item && media && media.src){
+      window.electronAPI.updateVisualizer({
+        title: item.title || 'Unknown',
+        artist: item.artist || 'Unknown Artist',
+        album: item.album || 'Unknown Album',
+        audioSrc: media.src,
+        isPlaying: !media.paused,
+        currentTime: media.currentTime || 0
+      })
+    }
+  }catch(_){}
+}
+
+let visualizerUpdateInterval = null
+function startVisualizerUpdates(){
+  if(visualizerUpdateInterval){
+    clearInterval(visualizerUpdateInterval)
+  }
+  visualizerUpdateInterval = setInterval(()=>{
+    try{ updateVisualizer() }catch(_){}
+  }, 100)
+}
+
+function stopVisualizerUpdates(){
+  if(visualizerUpdateInterval){
+    clearInterval(visualizerUpdateInterval)
+    visualizerUpdateInterval = null
+  }
+}
+
+async function restorePlaybarState(){
+  try{
+    if(currentIndex >= 0 && currentIndex < queue.length){
+      const item = queue[currentIndex]
+      if(!item) return
+      
+      let thumbnail = null
+      const serverPath = item.path || item.localPath || ''
+      if(serverPath){
+        try{
+          const settings = await window.electronAPI.getSettings()
+          const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
+          const norm = base.endsWith('/') ? base.slice(0,-1) : base
+          thumbnail = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
+        }catch(_){ }
+      }
+      
+      updateNowPlaying({
+        title: item.title || 'Unknown',
+        artist: item.artist || 'Unknown Artist',
+        album: item.album || 'Unknown Album',
+        thumbnail: thumbnail,
+        isVideo: item.isVideo || false
+      })
+    }
+  }catch(_){ }
 }
 
 function setPlayingState(isPlaying){
   els.playPause.innerHTML = isPlaying?'<i class="fas fa-pause"></i>':'<i class="fas fa-play"></i>'
+  try{ updateMediaSessionState() }catch(_){ }
+  try{ updateVisualizer() }catch(_){ }
+  if(isPlaying){
+    try{ startVisualizerUpdates() }catch(_){}
+  }
 }
 
 function clearPlaybar(){
   try{ els.audio.pause() }catch(_){ }
   try{ els.video.pause() }catch(_){ }
   try{ els.videoDisplay.pause() }catch(_){ }
+  cancelCrossfade()
   
   els.videoContainer.classList.add('hidden')
   els.videoPip.classList.add('hidden')
@@ -1384,6 +1870,7 @@ function clearPlaybar(){
   stopNowPlayingUpdates()
   try{ window.electronAPI.discordClear() }catch(_){ }
   refreshQueuePanel()
+  try{ updateFavoriteBtnUI() }catch(_){ }
 }
 
 function getMedia(){
@@ -1417,7 +1904,7 @@ function switchElementVisibility(){
         els.video.style.width = '100%'
         els.video.style.height = 'calc(100% - 40px)'
         els.video.style.objectFit = 'cover'
-        els.video.classList.remove('hidden') // Make sure video is visible
+        els.video.classList.remove('hidden')
         els.videoPip.appendChild(els.video)
       }
     } else {
@@ -1428,7 +1915,7 @@ function switchElementVisibility(){
         els.video.style.width = '100%'
         els.video.style.height = '100%'
         els.video.style.objectFit = 'contain'
-        els.video.classList.remove('hidden') // Make sure video is visible
+        els.video.classList.remove('hidden')
         els.videoContainer.appendChild(els.video)
       }
     }
@@ -1507,7 +1994,7 @@ async function updateNowPlayingOnServer(item, isPlaying = true){
       duration_ms: Math.floor((media.duration || 0) * 1000),
       position_ms: Math.floor((media.currentTime || 0) * 1000),
       is_playing: isPlaying,
-      is_repeat: repeatAll,
+      is_repeat: repeatMode === 1 || repeatMode === 2,
       is_shuffle: false
     }
     
@@ -1577,7 +2064,7 @@ async function stopNowPlayingOnServer(){
   }
 }
 
-function setDiscordPresenceForItem(item, isPlaying){
+async function setDiscordPresenceForItem(item, isPlaying){
   try{
     if(!item) return
     const media = getMedia()
@@ -1589,6 +2076,17 @@ function setDiscordPresenceForItem(item, isPlaying){
       album: item.album || 'Unknown Album',
       largeImageKey: 'logo',
       largeImageText: 'JuiceWRLD API'
+    }
+    const serverPath = item.path || item.localPath || ''
+    if(serverPath){
+      try{
+        const settings = await window.electronAPI.getSettings()
+        const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
+        const norm = base.endsWith('/') ? base.slice(0,-1) : base
+        const albumArtUrl = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
+        payload.largeImageKey = albumArtUrl
+        payload.largeImageText = item.title || 'JuiceWRLD API'
+      }catch(_){ }
     }
     if(isPlaying && durationMs > 0){
       const now = Date.now()
@@ -1627,6 +2125,76 @@ function stopNowPlayingUpdates(){
   try{ window.electronAPI.discordClear() }catch(_){ }
 }
 
+function setMediaSessionHandlers(){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const ms = navigator.mediaSession
+    ms.setActionHandler('play', ()=>{ const m=getMedia(); if(m && m.paused) togglePlay() })
+    ms.setActionHandler('pause', ()=>{ const m=getMedia(); if(m && !m.paused) togglePlay() })
+    ms.setActionHandler('previoustrack', ()=>{ prev() })
+    ms.setActionHandler('nexttrack', ()=>{ next() })
+    ms.setActionHandler('seekbackward', (d)=>{ const m=getMedia(); if(!m) return; const sec = Math.max(0, (d && d.seekOffset ? d.seekOffset : 10)); m.currentTime = Math.max(0, (m.currentTime||0) - sec); intendedPosition = m.currentTime })
+    ms.setActionHandler('seekforward', (d)=>{ const m=getMedia(); if(!m) return; const sec = Math.max(0, (d && d.seekOffset ? d.seekOffset : 10)); const dur = m.duration||0; m.currentTime = Math.min(dur, (m.currentTime||0) + sec); intendedPosition = m.currentTime })
+    ms.setActionHandler('seekto', (d)=>{ const m=getMedia(); if(!m) return; if(d && typeof d.seekTime==='number'){ const dur = m.duration||0; const t = Math.max(0, Math.min(dur, d.seekTime)); m.currentTime = t; intendedPosition = t; updateMediaSessionState() } })
+  }catch(_){ }
+}
+
+async function setMediaSessionMetadata(meta){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const candidates = []
+    const addCandidate = (u)=>{ if(!u) return; if(candidates.indexOf(u)===-1) candidates.push(u) }
+    addCandidate(meta && typeof meta.thumbnail==='string' ? meta.thumbnail : null)
+    if(meta && (meta.path || meta.localPath)){
+      try{
+        let base = 'https://m.juicewrldapi.com'
+        try{ const s = await window.electronAPI.getSettings(); base = (s && s.serverUrl) ? String(s.serverUrl).trim() : base }catch(_){ }
+        if(base.endsWith('/')) base = base.slice(0,-1)
+        const p = meta.path || meta.localPath
+        const art = `${base}/album-art?filepath=${encodeURIComponent(p)}`
+        addCandidate(art)
+      }catch(_){ }
+    }
+    addCandidate('assets/icon_512x512.png')
+    const buildEntries = (u)=>{
+      const lower = String(u).toLowerCase()
+      const type = (lower.endsWith('.jpg')||lower.endsWith('.jpeg')) ? 'image/jpeg' : (lower.endsWith('.png') ? 'image/png' : 'image/jpeg')
+      return [
+        { src: u, sizes:'96x96', type },
+        { src: u, sizes:'128x128', type },
+        { src: u, sizes:'192x192', type },
+        { src: u, sizes:'256x256', type },
+        { src: u, sizes:'512x512', type }
+      ]
+    }
+    const artwork = candidates.flatMap(buildEntries)
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta?.title || 'Player',
+      artist: meta?.artist || '',
+      album: meta?.album || '',
+      artwork
+    })
+    setMediaSessionHandlers()
+    updateMediaSessionState()
+  }catch(_){ }
+}
+
+function updateMediaSessionState(){
+  try{
+    if(!('mediaSession' in navigator)) return
+    const m = getMedia()
+    if(!m) return
+    navigator.mediaSession.playbackState = m.paused ? 'paused' : 'playing'
+    if(Number.isFinite(m.duration) && m.duration>0){
+      navigator.mediaSession.setPositionState({
+        duration: m.duration||0,
+        playbackRate: m.playbackRate||1,
+        position: Math.max(0, Number.isFinite(m.currentTime)?m.currentTime:0)
+      })
+    }
+  }catch(_){ }
+}
+
 async function playIndex(idx){
   if(idx<0||idx>=queue.length) return
   currentIndex = idx
@@ -1656,6 +2224,7 @@ async function playIndex(idx){
     lastLocalControlAt = Date.now()
     try{ broadcastRoomSync({ is_playing: true, position_ms: safePositionMs(), server_path: serverPath, track_title: item.title||'Unknown', artist_name: item.artist||'', album_name: item.album||'' }) }catch(_){ }
     try{ setDiscordPresenceForItem(item, true) }catch(_){ }
+    try{ updateVisualizer() }catch(_){}
   }).catch(()=>{
     setPlayingState(false)
     updateQueueUIOnPlay()
@@ -1680,6 +2249,7 @@ function pushPlayHistory(item){
 }
 
 function togglePlay(){
+  cancelCrossfade()
   const media = getMedia()
   if(media.src && !media.src.startsWith('blob:') && media.readyState < 2){ try{ media.load() }catch(_){ } }
   if(media.paused){ 
@@ -1744,7 +2314,7 @@ function next(){
   }
   
   if(currentIndex >= queue.length){
-    if(repeatAll){
+    if(repeatMode === 1){
       currentIndex = 0
       playIndex(0)
     } else {
@@ -1756,7 +2326,13 @@ function next(){
   playIndex(currentIndex)
 }
 
+function userNext(){
+  cancelCrossfade()
+  next()
+}
+
 function prev(){
+  cancelCrossfade()
   if(queue.length===0) return
   if(currentIndex<=0){
     playIndex(0)
@@ -1773,11 +2349,24 @@ function bindMediaEvents(media){
       els.seek.value = String((media.currentTime/media.duration)*100)
       intendedPosition = media.currentTime
     }
+    try{ updateMediaSessionState() }catch(_){ }
+    try{ maybeScheduleCrossfade(media) }catch(_){ }
   })
   media.addEventListener('loadedmetadata',()=>{
     els.duration.textContent = formatTime(media.duration)
+    try{ updateMediaSessionState() }catch(_){ }
   })
-  media.addEventListener('ended',()=>{ next() })
+  media.addEventListener('ended',()=>{
+    if(repeatMode === 2){
+      const m = getMedia()
+      if(m){
+        m.currentTime = 0
+        m.play().catch(()=>{})
+      }
+    } else {
+      next()
+    }
+  })
   media.addEventListener('error',()=>{ next() })
 }
 
@@ -1813,6 +2402,156 @@ function onVolume(e){
   if(els.videoPipDisplay) {
     els.videoPipDisplay.volume = volume
   }
+  if(crossfadeAudio){
+    crossfadeAudio.volume = volume
+  }
+}
+
+function cancelCrossfade(){
+  crossfadeActive = false
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  if(crossfadeAudio){
+    try{ crossfadeAudio.pause() }catch(_){}
+  }
+}
+
+function maybeScheduleCrossfade(media){
+  if(!crossfadeEnabled) return
+  if(isCurrentVideo()) return
+  if(!media) return
+  if(media.paused) return
+  if(!Number.isFinite(media.duration) || media.duration<=0) return
+  if(repeatMode === 2) return
+  if(queue.length === 0) return
+  if(currentIndex<0 || currentIndex>=queue.length) return
+  const currentItem = queue[currentIndex]
+  let targetIndex = -1
+  if(currentIndex<queue.length-1){
+    targetIndex = currentIndex+1
+  } else if(repeatMode===1 && queue.length>1){
+    targetIndex = 0
+  }
+  if(targetIndex<0 || targetIndex>=queue.length) return
+  const nextItem = queue[targetIndex]
+  if(!currentItem || !nextItem) return
+  if(!currentItem.isAudio || currentItem.isVideo) return
+  if(!nextItem.isAudio || nextItem.isVideo) return
+  if(crossfadeActive) return
+  const d = Math.max(1, Math.min(10, crossfadeDuration||0))
+  const remaining = media.duration - media.currentTime
+  if(remaining <= d && remaining > 0){
+    startCrossfadeTransition(media, d)
+  }
+}
+
+function startCrossfadeTransition(media, durationSeconds){
+  const m = media || getMedia()
+  if(!m) return
+  if(m.paused) return
+  if(!crossfadeEnabled) return
+  if(isCurrentVideo()) return
+  if(queue.length === 0) return
+  const d = Math.max(1, Math.min(10, durationSeconds||crossfadeDuration||0))
+  if(!crossfadeAudio){
+    try{
+      crossfadeAudio = document.createElement('audio')
+      crossfadeAudio.preload = 'metadata'
+      crossfadeAudio.style.display = 'none'
+      document.body.appendChild(crossfadeAudio)
+    }catch(_){}
+  }
+  if(!crossfadeAudio) return
+  const baseVolume = m.volume
+  const durationMs = Math.max(1000, Math.floor(d*1000))
+  const stepMs = 50
+  try{
+    crossfadeAudio.src = m.src
+    if(Number.isFinite(m.currentTime)){
+      crossfadeAudio.currentTime = m.currentTime
+    }
+  }catch(_){}
+  try{
+    crossfadeAudio.volume = baseVolume
+    crossfadeAudio.muted = false
+    crossfadeAudio.play().catch(()=>{})
+  }catch(_){}
+  try{ m.pause() }catch(_){}
+  crossfadeActive = true
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  let elapsed = 0
+  crossfadeInterval = setInterval(()=>{
+    if(!crossfadeActive){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      return
+    }
+    elapsed += stepMs
+    if(elapsed >= durationMs){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      if(crossfadeAudio){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+      crossfadeActive = false
+    }
+  }, stepMs)
+  startNextTrackWithFadeIn(baseVolume, durationMs, stepMs)
+}
+
+function startNextTrackWithFadeIn(baseVolume, halfMs, stepMs){
+  if(queue.length === 0){
+    crossfadeActive = false
+    return
+  }
+  next()
+  const media = getMedia()
+  if(!media){
+    crossfadeActive = false
+    return
+  }
+  media.volume = 0
+  let elapsedIn = 0
+  const totalMs = halfMs
+  const step = stepMs
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  crossfadeInterval = setInterval(()=>{
+    if(!crossfadeActive){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      return
+    }
+    elapsedIn += step
+    const t = Math.min(1, elapsedIn/totalMs)
+    let vIn = baseVolume * t
+    let vOut = baseVolume * (1 - t)
+    if(vIn > baseVolume) vIn = baseVolume
+    if(vOut < 0) vOut = 0
+    media.volume = vIn
+    if(crossfadeAudio){
+      crossfadeAudio.volume = vOut
+      if(vOut === 0){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+    }
+    if(elapsedIn >= totalMs){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      media.volume = baseVolume
+      if(crossfadeAudio){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+      crossfadeActive = false
+    }
+  }, step)
 }
 
 function applySearch(){
@@ -1841,15 +2580,20 @@ function init(){
         paused: media ? media.paused : true,
         volume: media ? media.volume : 1,
         isVideo: isCurrentVideo(),
-        queue: queue.map(it=>({ title: it.title, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio }))
+        queue: queue.map(it=>({ title: it.title, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio })),
+        handoff: 'player_to_main'
       } : null
       await window.electronAPI.savePlaybackState(state)
     }catch(_){ }
     window.electronAPI.openMainUI()
   }
   els.playPause.onclick = togglePlay
-  els.next.onclick = next
+  els.next.onclick = userNext
   els.prev.onclick = prev
+  if(els.repeatBtn){
+    els.repeatBtn.onclick = toggleRepeat
+    updateRepeatBtnUI()
+  }
   els.seek.oninput = (e)=>{
     const media = getMedia()
     if(media.duration>0){ 
@@ -1862,12 +2606,24 @@ function init(){
   els.volume.oninput = onVolume
   els.volume.onchange = onVolume
   els.search.oninput = applySearch
+  if(els.favoriteBtn){
+    els.favoriteBtn.onclick = ()=>{
+      if(currentIndex>=0 && currentIndex<queue.length){
+        const it = queue[currentIndex]
+        const key = it.localPath
+        if(favorites.has(key)) favorites.delete(key); else favorites.add(key)
+        saveFavorites()
+        updateFavoriteBtnUI()
+        if(currentView==='favorites') render()
+      }
+    }
+  }
   bindMediaEvents(els.audio)
   bindMediaEvents(els.video)
   try{ 
     els.video.muted = false; 
     els.video.playsInline = true;
-    els.video.controls = false; // Hide default controls since we have custom ones
+    els.video.controls = false;
   }catch(_){ }
   
   if(els.pipClose) {
@@ -1876,7 +2632,7 @@ function init(){
       const hasCurrent = currentIndex>=0 && currentIndex < queue.length
       pipMode = false
       if(hasCurrent){
-        next()
+        userNext()
       } else {
         clearPlaybar()
       }
@@ -1974,6 +2730,39 @@ function init(){
     if(e.code==='ArrowUp'){ const v=Math.min(1,(els.audio.volume+0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.code==='ArrowDown'){ const v=Math.max(0,(els.audio.volume-0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.ctrlKey && String(e.key).toLowerCase()==='h'){ e.preventDefault(); window.electronAPI.openMainUI() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='s'){ e.preventDefault(); userNext() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='v'){ 
+      e.preventDefault()
+      try{
+        window.electronAPI.toggleVisualizer().then(async result=>{
+          if(result && result.isOpen){
+            await updateVisualizer()
+            startVisualizerUpdates()
+          } else {
+            stopVisualizerUpdates()
+          }
+        })
+      }catch(_){}
+    }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='r'){ 
+      e.preventDefault()
+      const m = getMedia()
+      if(m && m.src && currentIndex>=0 && currentIndex<queue.length){
+        m.currentTime = 0
+        intendedPosition = 0
+        if(m.paused){
+          m.play().then(()=>{
+            setPlayingState(true)
+            updateQueueUIOnPlay()
+            const item = queue[currentIndex]
+            if(item){
+              startNowPlayingUpdates(item)
+              try{ setDiscordPresenceForItem(item, true) }catch(_){}
+            }
+          }).catch(()=>{})
+        }
+      }
+    }
   })
   
   document.addEventListener('dragover', (e) => e.preventDefault())
@@ -1987,7 +2776,92 @@ function init(){
   if(cls) cls.onclick = ()=> window.electronAPI.closeWindow()
 
   loadAuthState()
-  loadLibrary()
+  try{ loadFavorites().then(()=>{ try{ if(currentView==='favorites') render(); else scheduleCardUpdate() }catch(_){ } }) }catch(_){ }
+  loadLibrary().then(async ()=>{
+    try{
+      const res = await window.electronAPI.getPlaybackState()
+      if(res && res.success && res.state){
+        const state = res.state
+        if(Array.isArray(state.queue) && state.queue.length>0){
+          const newQueue = []
+          let newIndex = -1
+          for(let i=0;i<state.queue.length;i++){
+            const prevItem = state.queue[i]
+            let item = libraryItems.find(it=> it.localPath===prevItem.localPath)
+            if(!item && prevItem && typeof prevItem.localPath==='string'){
+              item = {
+                title: prevItem.title || 'Unknown',
+                path: prevItem.path || prevItem.localPath,
+                localPath: prevItem.localPath,
+                isVideo: !!prevItem.isVideo,
+                isAudio: !!prevItem.isAudio,
+                album: prevItem.album || 'Unknown Album',
+                artist: prevItem.artist || 'Unknown Artist',
+                year: null,
+                genre: null,
+                albumArtist: null,
+                track: null,
+                thumbnail: null,
+                mtimeMs: null
+              }
+            }
+            if(item){
+              newQueue.push(item)
+              if(i === state.index) newIndex = newQueue.length-1
+            }
+          }
+          if(newQueue.length>0){
+            queue = newQueue
+            currentIndex = newIndex>=0 ? newIndex : 0
+            switchElementVisibility()
+            const media = getMedia()
+            const currentItem = queue[currentIndex]
+            const url = fileURL(currentItem.localPath)
+            if(media && url){
+              if(media.src !== url) media.src = url
+              try{ media.load() }catch(_){ }
+              if(typeof state.volume==='number') media.volume = Math.max(0, Math.min(1, state.volume))
+              updateNowPlaying(currentItem)
+              refreshQueuePanel()
+              const restorePlayback = ()=>{
+                if(typeof state.time==='number'){
+                  const seekTo = Math.max(0, state.time)
+                  try{ media.currentTime = seekTo }catch(_){ }
+                }
+                if(state.handoff === 'main_to_player' && !state.paused){
+                  media.play().then(()=>{
+                    setPlayingState(true)
+                    updateQueueUIOnPlay()
+                    startNowPlayingUpdates(currentItem)
+                  }).catch(()=>{
+                    setPlayingState(false)
+                    updateQueueUIOnPlay()
+                  })
+                } else {
+                  setPlayingState(false)
+                  updateQueueUIOnPlay()
+                }
+              }
+              if(media.readyState >= 1){
+                restorePlayback()
+              } else {
+                const onceLoaded = ()=>{
+                  media.removeEventListener('loadedmetadata', onceLoaded)
+                  media.removeEventListener('canplay', onceLoaded)
+                  restorePlayback()
+                }
+                media.addEventListener('loadedmetadata', onceLoaded)
+                media.addEventListener('canplay', onceLoaded)
+                media.load()
+              }
+            }
+          }
+        }
+      }
+      try{ await window.electronAPI.clearPlaybackState() }catch(_){ }
+    }catch(_){ }
+    try{ syncCollectionsWithServer() }catch(_){ }
+  })
   mountQueueUI()
   try{
     const settingsInit = ()=>{
@@ -1996,10 +2870,49 @@ function init(){
         const cid = (s && s.discordRpcClientId) ? String(s.discordRpcClientId) : '1401436107765452860'
         window.electronAPI.discordSetEnabled(enabled)
         if(enabled){ window.electronAPI.discordInit(cid) }
+        crossfadeEnabled = !!(s && s.crossfadeEnabled)
+        const d = s && typeof s.crossfadeDuration === 'number' ? s.crossfadeDuration : 5
+        crossfadeDuration = Math.max(1, Math.min(10, d))
       }).catch(()=>{})
     }
     settingsInit()
   }catch(_){ }
+  try{ updateFavoriteBtnUI() }catch(_){ }
+}
+
+function updateFavoriteBtnUI(){
+  if(!els.favoriteBtn) return
+  const icon = els.favoriteBtn.querySelector('i')
+  const it = (currentIndex>=0 && currentIndex<queue.length) ? queue[currentIndex] : null
+  const isFav = !!(it && favorites.has(it.localPath))
+  if(icon){ icon.className = isFav ? 'fas fa-star' : 'far fa-star' }
+  els.favoriteBtn.classList.toggle('favorited', isFav)
+  els.favoriteBtn.title = isFav ? 'Unfavorite' : 'Favorite'
+}
+
+function toggleRepeat(){
+  repeatMode = (repeatMode + 1) % 3
+  updateRepeatBtnUI()
+}
+
+function updateRepeatBtnUI(){
+  if(!els.repeatBtn) return
+  
+  els.repeatBtn.classList.remove('repeat-off', 'repeat-all', 'repeat-one', 'active')
+  
+  if(repeatMode === 0){
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i>'
+    els.repeatBtn.classList.add('repeat-off')
+    els.repeatBtn.title = 'Repeat Off'
+  } else if(repeatMode === 1){
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i>'
+    els.repeatBtn.classList.add('repeat-all', 'active')
+    els.repeatBtn.title = 'Repeat All'
+  } else {
+    els.repeatBtn.innerHTML = '<i class="fas fa-repeat"></i><span class="repeat-one-indicator">1</span>'
+    els.repeatBtn.classList.add('repeat-one', 'active')
+    els.repeatBtn.title = 'Repeat One'
+  }
 }
 
 function makePipDraggable() {
@@ -2405,7 +3318,7 @@ function removeFromQueue(index){
   refreshQueuePanel()
 }
 
-function openContextMenu(x, y, item, list){
+function openContextMenu(x, y, item, list, playlistIndex){
   if(!contextMenuEl){
     contextMenuEl = document.createElement('div'); contextMenuEl.className='context-menu'
     document.body.appendChild(contextMenuEl)
@@ -2415,6 +3328,15 @@ function openContextMenu(x, y, item, list){
   addNext.onclick = ()=>{ addNextInQueue(item); hideContextMenu() }
   const addEnd = document.createElement('button'); addEnd.textContent = 'Add to Queue'
   addEnd.onclick = ()=>{ queue.push(item); refreshQueuePanel(); hideContextMenu() }
+  const favBtn = document.createElement('button'); favBtn.textContent = favorites.has(item.localPath)?'Unfavorite':'Favorite'
+  favBtn.onclick = ()=>{
+    const key = item.localPath
+    if(favorites.has(key)) favorites.delete(key); else favorites.add(key)
+    saveFavorites()
+    hideContextMenu()
+    try{ updateFavoriteBtnUI() }catch(_){ }
+    if(currentView==='favorites') render()
+  }
   const addToPlaylist = document.createElement('button'); addToPlaylist.textContent = 'Add to Playlist'
   addToPlaylist.onclick = ()=>{
     hideContextMenu()
@@ -2453,8 +3375,25 @@ function openContextMenu(x, y, item, list){
       }
     })
   }
+  let removeFromPlaylistBtn = null
+  if(typeof playlistIndex === 'number' && playlistIndex >= 0 && playlists && playlists[playlistIndex]){
+    removeFromPlaylistBtn = document.createElement('button'); removeFromPlaylistBtn.textContent = 'Remove from Playlist'
+    removeFromPlaylistBtn.onclick = async ()=>{
+      hideContextMenu()
+      const pl = playlists[playlistIndex]
+      if(!pl || !Array.isArray(pl.items)) return
+      const idx = pl.items.indexOf(item)
+      if(idx === -1) return
+      pl.items.splice(idx,1)
+      await savePlaylists()
+      if(currentView==='playlists') renderPlaylists()
+      else if(inDetailView) renderPlaylistDetail(playlistIndex)
+    }
+  }
   contextMenuEl.appendChild(addNext); contextMenuEl.appendChild(addEnd)
+  contextMenuEl.appendChild(favBtn)
   contextMenuEl.appendChild(addToPlaylist)
+  if(removeFromPlaylistBtn) contextMenuEl.appendChild(removeFromPlaylistBtn)
   contextMenuEl.style.left = x+'px'
   contextMenuEl.style.top = y+'px'
   contextMenuEl.style.display = 'block'
