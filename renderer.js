@@ -2575,11 +2575,23 @@ function showToast(type, message) {
     }, 3000);
 }
 
+let lastNotification = { title: null, body: null, time: 0 };
+const NOTIFICATION_DEBOUNCE_MS = 2000;
+
 function showDesktopNotification(title, body) {
     try {
         if (!('Notification' in window)) return;
         const isEnabled = !!(currentSettings && currentSettings.showTrayNotifications);
         if (!isEnabled) return;
+        
+        const now = Date.now();
+        if (lastNotification.title === title && lastNotification.body === body && 
+            (now - lastNotification.time) < NOTIFICATION_DEBOUNCE_MS) {
+            return;
+        }
+        
+        lastNotification = { title, body, time: now };
+        
         if (Notification.permission === 'granted') {
             new Notification(title, { body });
         } else if (Notification.permission !== 'denied') {
@@ -3067,7 +3079,6 @@ async function startSyncOptimized() {
     updateSyncStatus('syncing');
     showProgress();
     updateStatus('Starting sync...');
-    showDesktopNotification('Sync started', 'Sync & download has begun');
     
     try {
         const progressContainer = document.createElement('div');
@@ -3144,10 +3155,14 @@ async function startSyncOptimized() {
                     try { await window.electronAPI.appendJobLog(`[COMPLETE] ${processedTotal} processed (d:${d} u:${u} s:${s} e:${e} del:${Number(data.deleted||0)})`) } catch (_) {}
                     if (e > 0) {
                         showToast('warning', `Sync completed with ${e} errors. Processed ${processedTotal} files.`);
-                        showDesktopNotification('Sync completed with errors', `${processedTotal} processed, ${e} errors`);
+                        if (d > 0) {
+                            showDesktopNotification('Sync completed with errors', `${processedTotal} processed, ${e} errors`);
+                        }
                     } else {
                         showToast('success', `Sync completed successfully! Processed ${processedTotal} files.`);
-                        showDesktopNotification('Sync completed', `${processedTotal} files processed successfully`);
+                        if (d > 0) {
+                            showDesktopNotification('Sync completed', `${processedTotal} files processed successfully`);
+                        }
                     }
                     break;
                     

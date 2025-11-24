@@ -781,7 +781,9 @@ function buildCard(it, list, options){
   }
   card.oncontextmenu = (e)=>{
     e.preventDefault();
-    openContextMenu(e.clientX, e.clientY, it, list)
+    let pIndex = null
+    if(options && typeof options.playlistIndex === 'number') pIndex = options.playlistIndex
+    openContextMenu(e.clientX, e.clientY, it, list, pIndex)
   }
   return card
 }
@@ -1135,8 +1137,30 @@ function renderSearch(){
 
 function renderMusic(){ renderIncrementalGrid(libraryItems.filter(i=>i.isAudio), { playScope:'single' }) }
 function renderFavorites(){
+  teardownVirtualizer()
   const items = libraryItems.filter(i=>favorites.has(i.localPath))
-  renderIncrementalGrid(items, { playScope:'single' })
+  els.library.innerHTML = ''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent='Favorites'
+  const actions = document.createElement('div'); actions.className='collection-actions'
+  const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
+  const shuffle = document.createElement('div'); shuffle.className='pill secondary'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
+  playAll.onclick = (e)=>{ e.stopPropagation(); if(items.length){ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+  shuffle.onclick = (e)=>{ e.stopPropagation(); if(items.length){ const arr=[...items]; for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]] } queue=arr; repeatAll=false; playIndex(0); refreshQueuePanel() } }
+  actions.appendChild(playAll); actions.appendChild(shuffle)
+  const grid = document.createElement('div'); grid.className='row'
+  els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
+  const chunk = 60
+  let i = 0
+  function appendChunk(){
+    const end = Math.min(items.length, i+chunk)
+    for(; i<end; i++){
+      grid.appendChild(buildCard(items[i], items, { playScope: 'single' }))
+    }
+    if(i < items.length) requestAnimationFrame(appendChunk)
+  }
+  appendChunk()
 }
 function renderVideos(){
   teardownVirtualizer()
@@ -1267,13 +1291,51 @@ function renderPlaylists(){
   }
   playlists.forEach((pl, idx)=>{
     const card = buildCollectionCard(pl.name, pl.items||[], 'album')
-    card.onclick = ()=> renderCollectionDetail(pl.name, pl.items||[], 'album')
+    card.onclick = ()=> renderPlaylistDetail(idx)
     card.oncontextmenu = (e)=>{
       e.preventDefault()
       openPlaylistContextMenu(e.clientX, e.clientY, idx)
     }
     grid.appendChild(card)
   })
+}
+
+function renderPlaylistDetail(playlistIndex){
+  const pl = playlists[playlistIndex]
+  if(!pl) return
+  const items = pl.items || []
+  inDetailView = true
+  els.library.innerHTML=''
+  els.library.style.display = ''
+  els.library.style.scrollBehavior = ''
+  const header = document.createElement('div'); header.className='section-title'; header.textContent = `Playlist: ${pl.name}`
+  const actions = document.createElement('div'); actions.className='collection-actions';
+  const playAll = document.createElement('div'); playAll.className='pill'; playAll.innerHTML='<i class="fas fa-play"></i> Play All'
+  playAll.onclick = ()=>{
+    const doIt = ()=>{ queue=[...items]; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with this playlist. Continue?', onConfirm: doIt }) }
+    else doIt()
+  }
+  actions.appendChild(playAll)
+  const shuffle = document.createElement('div'); shuffle.className='pill'; shuffle.innerHTML='<i class="fas fa-random"></i> Shuffle'
+  shuffle.onclick = ()=>{
+    const doIt = ()=>{ const shuffled = [...items].sort(() => Math.random() - 0.5); queue = shuffled; repeatAll=false; playIndex(0); refreshQueuePanel() }
+    if(queue.length>0){ modal.open({ title:'Replace Queue?', message:'This will replace your current queue with a shuffled order. Continue?', onConfirm: doIt }) }
+    else doIt()
+  }
+  actions.appendChild(shuffle)
+  const grid = document.createElement('div'); grid.className='row collection-grid'
+  els.library.appendChild(header); els.library.appendChild(actions); els.library.appendChild(grid)
+  const chunk = 60
+  let i=0
+  function appendChunk(){
+    const frag = document.createDocumentFragment()
+    const end = Math.min(i+chunk, items.length)
+    for(; i<end; i++) frag.appendChild(buildCard(items[i], items, { playScope: 'single', playlistIndex }))
+    grid.appendChild(frag)
+    if(i<items.length) requestAnimationFrame(appendChunk)
+  }
+  appendChunk()
 }
 
 function renderFolders(){
@@ -2634,7 +2696,7 @@ function removeFromQueue(index){
   refreshQueuePanel()
 }
 
-function openContextMenu(x, y, item, list){
+function openContextMenu(x, y, item, list, playlistIndex){
   if(!contextMenuEl){
     contextMenuEl = document.createElement('div'); contextMenuEl.className='context-menu'
     document.body.appendChild(contextMenuEl)
@@ -2691,9 +2753,25 @@ function openContextMenu(x, y, item, list){
       }
     })
   }
+  let removeFromPlaylistBtn = null
+  if(typeof playlistIndex === 'number' && playlistIndex >= 0 && playlists && playlists[playlistIndex]){
+    removeFromPlaylistBtn = document.createElement('button'); removeFromPlaylistBtn.textContent = 'Remove from Playlist'
+    removeFromPlaylistBtn.onclick = async ()=>{
+      hideContextMenu()
+      const pl = playlists[playlistIndex]
+      if(!pl || !Array.isArray(pl.items)) return
+      const idx = pl.items.indexOf(item)
+      if(idx === -1) return
+      pl.items.splice(idx,1)
+      await savePlaylists()
+      if(currentView==='playlists') renderPlaylists()
+      else if(inDetailView) renderPlaylistDetail(playlistIndex)
+    }
+  }
   contextMenuEl.appendChild(addNext); contextMenuEl.appendChild(addEnd)
   contextMenuEl.appendChild(favBtn)
   contextMenuEl.appendChild(addToPlaylist)
+  if(removeFromPlaylistBtn) contextMenuEl.appendChild(removeFromPlaylistBtn)
   contextMenuEl.style.left = x+'px'
   contextMenuEl.style.top = y+'px'
   contextMenuEl.style.display = 'block'
