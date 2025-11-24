@@ -383,7 +383,7 @@ let cachedCards = null
 let lastView = null
 
 function updateExistingCards(){
-  if(currentView === 'albums' || currentView === 'home' || currentView === 'music' || currentView === 'videos'){
+  if(currentView === 'albums' || currentView === 'home' || currentView === 'music' || currentView === 'videos' || currentView === 'favorites' || currentView === 'artists'){
     if(!cachedCards || lastView !== currentView){
       cachedCards = document.querySelectorAll('.card')
       lastView = currentView

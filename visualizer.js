@@ -71,20 +71,23 @@ function drawBars() {
   const barCount = 64
   const barWidth = canvas.width / barCount
   const centerY = canvas.height / 2
+  const centerX = canvas.width / 2
   const time = Date.now() * 0.001
 
   analyser.getByteFrequencyData(dataArray)
 
-  for (let i = 0; i < barCount; i++) {
-    const dataIndex = Math.floor((i / barCount) * dataArray.length)
+  const halfBars = barCount / 2
+  for (let i = 0; i < halfBars; i++) {
+    const dataIndex = Math.floor((i / halfBars) * dataArray.length)
     const barHeight = (dataArray[dataIndex] / 255) * canvas.height * 0.7
 
-    const hue = (i / barCount) * 360 + (time * 30) % 360
+    const hue = (i / halfBars) * 360 + (time * 30) % 360
     const alpha = 0.8 + (dataArray[dataIndex] / 255) * 0.2
     ctx.fillStyle = `hsla(${hue}, 100%, 60%, ${alpha})`
 
-    const x = i * barWidth
-    ctx.fillRect(x, centerY - barHeight / 2, barWidth - 1, barHeight)
+    const offset = i * barWidth
+    ctx.fillRect(centerX - offset - barWidth, centerY - barHeight / 2, barWidth - 1, barHeight)
+    ctx.fillRect(centerX + offset, centerY - barHeight / 2, barWidth - 1, barHeight)
   }
 }
 
@@ -133,6 +136,7 @@ function drawCircle() {
 
 function drawWaveform() {
   const centerY = canvas.height / 2
+  const centerX = canvas.width / 2
   const time = Date.now() * 0.001
 
   analyser.getByteTimeDomainData(timeDataArray)
@@ -141,54 +145,75 @@ function drawWaveform() {
   ctx.lineWidth = 3
   ctx.beginPath()
 
-  const sliceWidth = canvas.width / timeDataArray.length
-  let x = 0
+  const halfLength = Math.floor(timeDataArray.length / 2)
+  const sliceWidth = (canvas.width / 2) / halfLength
 
-  for (let i = 0; i < timeDataArray.length; i++) {
+  for (let i = 0; i < halfLength; i++) {
     const v = timeDataArray[i] / 128.0
     const y = centerY + (v * canvas.height * 0.4)
+    const x = centerX + (i * sliceWidth)
 
     if (i === 0) {
-      ctx.moveTo(x, y)
+      ctx.moveTo(centerX, y)
     } else {
       ctx.lineTo(x, y)
     }
-
-    x += sliceWidth
   }
 
+  for (let i = halfLength - 1; i >= 0; i--) {
+    const v = timeDataArray[i] / 128.0
+    const y = centerY + (v * canvas.height * 0.4)
+    const x = centerX - ((halfLength - i) * sliceWidth)
+    ctx.lineTo(x, y)
+  }
+
+  ctx.closePath()
   ctx.stroke()
 
   analyser.getByteFrequencyData(dataArray)
-  for (let i = 0; i < dataArray.length; i++) {
+  const halfDataLength = Math.floor(dataArray.length / 2)
+  const barWidth = (canvas.width / 2) / halfDataLength
+  for (let i = 0; i < halfDataLength; i++) {
     const barHeight = (dataArray[i] / 255) * canvas.height * 0.3
-    const hue = (i / dataArray.length) * 360 + (time * 50) % 360
+    const hue = (i / halfDataLength) * 360 + (time * 50) % 360
     ctx.fillStyle = `hsla(${hue}, 100%, 60%, 0.3)`
-    ctx.fillRect(i * (canvas.width / dataArray.length), centerY - barHeight / 2, canvas.width / dataArray.length, barHeight)
+    const offset = i * barWidth
+    ctx.fillRect(centerX - offset - barWidth, centerY - barHeight / 2, barWidth, barHeight)
+    ctx.fillRect(centerX + offset, centerY - barHeight / 2, barWidth, barHeight)
   }
 }
 
 function drawParticles() {
   const time = Date.now() * 0.001
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
   analyser.getByteFrequencyData(dataArray)
 
-  for (let i = 0; i < 50; i++) {
-    const dataIndex = Math.floor((i / 50) * dataArray.length)
+  const particleCount = 50
+  const halfParticles = particleCount / 2
+  for (let i = 0; i < halfParticles; i++) {
+    const dataIndex = Math.floor((i / halfParticles) * dataArray.length)
     const intensity = dataArray[dataIndex] / 255
-    const x = (i / 50) * canvas.width
-    const y = canvas.height / 2 + Math.sin(time * 2 + i) * canvas.height * 0.2 * intensity
+    const offset = (i / halfParticles) * (canvas.width / 2)
+    const y = centerY + Math.sin(time * 2 + i) * canvas.height * 0.2 * intensity
 
-    const hue = (i / 50) * 360 + (time * 50) % 360
+    const hue = (i / halfParticles) * 360 + (time * 50) % 360
     const size = 3 + intensity * 7
     ctx.fillStyle = `hsl(${hue}, 100%, 60%)`
     ctx.beginPath()
-    ctx.arc(x, y, size, 0, Math.PI * 2)
+    ctx.arc(centerX - offset, y, size, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.arc(centerX + offset, y, size, 0, Math.PI * 2)
     ctx.fill()
 
     ctx.strokeStyle = `hsla(${hue}, 100%, 60%, 0.3)`
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.arc(x, y, size * 2, 0, Math.PI * 2)
+    ctx.arc(centerX - offset, y, size * 2, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(centerX + offset, y, size * 2, 0, Math.PI * 2)
     ctx.stroke()
   }
 }
@@ -197,65 +222,32 @@ function drawVerticalStacks() {
   const barCount = 30
   const barWidth = canvas.width / barCount
   const bottomY = canvas.height
+  const centerX = canvas.width / 2
   const time = Date.now() * 0.001
 
   analyser.getByteFrequencyData(dataArray)
-  analyser.getByteTimeDomainData(timeDataArray)
 
-  const barHeights = []
-  const dotYPositions = []
+  const halfBars = barCount / 2
 
-  for (let i = 0; i < barCount; i++) {
-    const dataIndex = Math.floor((i / barCount) * dataArray.length)
+  for (let i = 0; i < halfBars; i++) {
+    const dataIndex = Math.floor((i / halfBars) * dataArray.length)
     const barHeight = (dataArray[dataIndex] / 255) * canvas.height * 0.8
-    barHeights.push(barHeight)
-
-    const timeIndex = Math.floor((i / barCount) * timeDataArray.length)
-    const timeValue = timeDataArray[timeIndex] / 128.0
-    const dotY = bottomY - barHeight - (timeValue * canvas.height * 0.15) - 20
-    dotYPositions.push(dotY)
-  }
-
-  for (let i = 0; i < barCount; i++) {
-    const x = i * barWidth + barWidth / 2
-    const barHeight = barHeights[i]
+    const offset = i * barWidth
     const barTop = bottomY - barHeight
 
-    const gradient = ctx.createLinearGradient(x - barWidth / 2, barTop, x - barWidth / 2, bottomY)
-    const hue = (i / barCount) * 360 + (time * 30) % 360
-    gradient.addColorStop(0, `hsl(${hue}, 100%, 70%)`)
-    gradient.addColorStop(1, `hsl(${hue}, 100%, 50%)`)
-    ctx.fillStyle = gradient
+    const hue = (i / halfBars) * 360 + (time * 30) % 360
+    
+    const gradientLeft = ctx.createLinearGradient(centerX - offset - barWidth, barTop, centerX - offset - barWidth, bottomY)
+    gradientLeft.addColorStop(0, `hsl(${hue}, 100%, 70%)`)
+    gradientLeft.addColorStop(1, `hsl(${hue}, 100%, 50%)`)
+    ctx.fillStyle = gradientLeft
+    ctx.fillRect(centerX - offset - barWidth + 1, barTop, barWidth - 2, barHeight)
 
-    ctx.fillRect(x - barWidth / 2 + 1, barTop, barWidth - 2, barHeight)
-  }
-
-  ctx.strokeStyle = `hsl(${(time * 50) % 360}, 100%, 60%)`
-  ctx.lineWidth = 2
-  ctx.beginPath()
-
-  for (let i = 0; i < barCount; i++) {
-    const x = i * barWidth + barWidth / 2
-    const y = dotYPositions[i]
-
-    if (i === 0) {
-      ctx.moveTo(x, y)
-    } else {
-      ctx.lineTo(x, y)
-    }
-  }
-
-  ctx.stroke()
-
-  for (let i = 0; i < barCount; i++) {
-    const x = i * barWidth + barWidth / 2
-    const y = dotYPositions[i]
-    const hue = (i / barCount) * 360 + (time * 50) % 360
-
-    ctx.fillStyle = `hsl(${hue}, 100%, 60%)`
-    ctx.beginPath()
-    ctx.arc(x, y, 4, 0, Math.PI * 2)
-    ctx.fill()
+    const gradientRight = ctx.createLinearGradient(centerX + offset, barTop, centerX + offset, bottomY)
+    gradientRight.addColorStop(0, `hsl(${hue}, 100%, 70%)`)
+    gradientRight.addColorStop(1, `hsl(${hue}, 100%, 50%)`)
+    ctx.fillStyle = gradientRight
+    ctx.fillRect(centerX + offset + 1, barTop, barWidth - 2, barHeight)
   }
 }
 
@@ -294,16 +286,19 @@ function draw() {
     const barCount = 64
     const barWidth = canvas.width / barCount
     const centerY = canvas.height / 2
+    const centerX = canvas.width / 2
 
-    for (let i = 0; i < barCount; i++) {
-      const wave = Math.sin(time * 2 + (i / barCount) * Math.PI * 4) * 0.5 + 0.5
+    const halfBars = barCount / 2
+    for (let i = 0; i < halfBars; i++) {
+      const wave = Math.sin(time * 2 + (i / halfBars) * Math.PI * 4) * 0.5 + 0.5
       const barHeight = wave * canvas.height * 0.4 + canvas.height * 0.1
 
-      const hue = (i / barCount) * 360 + (time * 50) % 360
+      const hue = (i / halfBars) * 360 + (time * 50) % 360
       ctx.fillStyle = `hsl(${hue}, 100%, 60%)`
 
-      const x = i * barWidth
-      ctx.fillRect(x, centerY - barHeight / 2, barWidth - 1, barHeight)
+      const offset = i * barWidth
+      ctx.fillRect(centerX - offset - barWidth, centerY - barHeight / 2, barWidth - 1, barHeight)
+      ctx.fillRect(centerX + offset, centerY - barHeight / 2, barWidth - 1, barHeight)
     }
   }
 
@@ -363,3 +358,4 @@ if (window.electronAPI) {
     currentAudioSrc = null
   })
 }
+

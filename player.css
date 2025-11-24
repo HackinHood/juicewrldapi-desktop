@@ -96,7 +96,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:#121212;
 .icon{background:#2a2a2a;border:1px solid #333;color:#ddd;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative}
 .icon.primary{background:#1db954;border:1px solid #1db954;color:#000}
 .icon.active{background:#1db954;border:1px solid #1db954;color:#000}
-.repeat-one-indicator{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-size:12px;font-weight:900;line-height:1;color:#1db954;background:#000;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;border:2px solid #1db954}
+.repeat-one-indicator{position:absolute;top:-8px;right:-8px;font-size:12px;font-weight:900;line-height:1;color:#1db954;background:#000;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;border:2px solid #1db954}
 .seek{display:flex;align-items:center;gap:8px;min-width:0}
 .seek input{width:100%;margin:0}
 .volume{display:flex;align-items:center;gap:8px;min-width:0}
