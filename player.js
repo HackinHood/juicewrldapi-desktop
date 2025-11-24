@@ -231,14 +231,16 @@ async function loadLibrary(){
     }
     saveCollectionsCache()
   }
-  
-  await loadPlaylists()
-  try{
-    const h = await window.electronAPI.getPlayHistory()
-    if(h && h.success && Array.isArray(h.history)) playHistory = h.history
-  }catch(_){}
-  
-  await (async function hydrateThumbnailsFromCache(){
+  render()
+  ;(async()=>{
+    await loadPlaylists()
+    try{
+      const h = await window.electronAPI.getPlayHistory()
+      if(h && h.success && Array.isArray(h.history)) playHistory = h.history
+    }catch(_){}
+    try{ if(currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists') scheduleRerender() }catch(_){}
+  })()
+  ;(async function hydrateThumbnailsFromCache(){
     const items = libraryItems
     const limit = Math.max(4, Math.min(16, (navigator.hardwareConcurrency||8)))
     let idx = 0
@@ -249,7 +251,10 @@ async function loadLibrary(){
         const it = items[i]
         try{
           const p = await window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs)
-          if(p) it.thumbnail = p
+          if(p){
+            it.thumbnail = p
+            try{ scheduleCardUpdate() }catch(_){}
+          }
         }catch(_){ }
       }
     }
@@ -257,7 +262,6 @@ async function loadLibrary(){
     for(let i=0;i<limit;i++) workers.push(run())
     await Promise.all(workers)
   })()
-  render()
 }
 
 function rebuildCollections(){
@@ -2108,7 +2112,8 @@ function init(){
         paused: media ? media.paused : true,
         volume: media ? media.volume : 1,
         isVideo: isCurrentVideo(),
-        queue: queue.map(it=>({ title: it.title, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio }))
+        queue: queue.map(it=>({ title: it.title, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio })),
+        handoff: 'player_to_main'
       } : null
       await window.electronAPI.savePlaybackState(state)
     }catch(_){ }
@@ -2253,6 +2258,26 @@ function init(){
     if(e.code==='ArrowUp'){ const v=Math.min(1,(els.audio.volume+0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.code==='ArrowDown'){ const v=Math.max(0,(els.audio.volume-0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.ctrlKey && String(e.key).toLowerCase()==='h'){ e.preventDefault(); window.electronAPI.openMainUI() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='s'){ e.preventDefault(); next() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='r'){ 
+      e.preventDefault()
+      const m = getMedia()
+      if(m && m.src && currentIndex>=0 && currentIndex<queue.length){
+        m.currentTime = 0
+        intendedPosition = 0
+        if(m.paused){
+          m.play().then(()=>{
+            setPlayingState(true)
+            updateQueueUIOnPlay()
+            const item = queue[currentIndex]
+            if(item){
+              startNowPlayingUpdates(item)
+              try{ setDiscordPresenceForItem(item, true) }catch(_){}
+            }
+          }).catch(()=>{})
+        }
+      }
+    }
   })
   
   document.addEventListener('dragover', (e) => e.preventDefault())
@@ -2267,7 +2292,91 @@ function init(){
 
   loadAuthState()
   try{ loadFavorites().then(()=>{ try{ if(currentView==='favorites') render(); else scheduleCardUpdate() }catch(_){ } }) }catch(_){ }
-  loadLibrary().then(()=>{ try{ syncCollectionsWithServer() }catch(_){ } })
+  loadLibrary().then(async ()=>{
+    try{
+      const res = await window.electronAPI.getPlaybackState()
+      if(res && res.success && res.state){
+        const state = res.state
+        if(Array.isArray(state.queue) && state.queue.length>0){
+          const newQueue = []
+          let newIndex = -1
+          for(let i=0;i<state.queue.length;i++){
+            const prevItem = state.queue[i]
+            let item = libraryItems.find(it=> it.localPath===prevItem.localPath)
+            if(!item && prevItem && typeof prevItem.localPath==='string'){
+              item = {
+                title: prevItem.title || 'Unknown',
+                path: prevItem.path || prevItem.localPath,
+                localPath: prevItem.localPath,
+                isVideo: !!prevItem.isVideo,
+                isAudio: !!prevItem.isAudio,
+                album: prevItem.album || 'Unknown Album',
+                artist: prevItem.artist || 'Unknown Artist',
+                year: null,
+                genre: null,
+                albumArtist: null,
+                track: null,
+                thumbnail: null,
+                mtimeMs: null
+              }
+            }
+            if(item){
+              newQueue.push(item)
+              if(i === state.index) newIndex = newQueue.length-1
+            }
+          }
+          if(newQueue.length>0){
+            queue = newQueue
+            currentIndex = newIndex>=0 ? newIndex : 0
+            switchElementVisibility()
+            const media = getMedia()
+            const currentItem = queue[currentIndex]
+            const url = fileURL(currentItem.localPath)
+            if(media && url){
+              if(media.src !== url) media.src = url
+              try{ media.load() }catch(_){ }
+              if(typeof state.volume==='number') media.volume = Math.max(0, Math.min(1, state.volume))
+              updateNowPlaying(currentItem)
+              refreshQueuePanel()
+              const restorePlayback = ()=>{
+                if(typeof state.time==='number'){
+                  const seekTo = Math.max(0, state.time)
+                  try{ media.currentTime = seekTo }catch(_){ }
+                }
+                if(state.handoff === 'main_to_player' && !state.paused){
+                  media.play().then(()=>{
+                    setPlayingState(true)
+                    updateQueueUIOnPlay()
+                    startNowPlayingUpdates(currentItem)
+                  }).catch(()=>{
+                    setPlayingState(false)
+                    updateQueueUIOnPlay()
+                  })
+                } else {
+                  setPlayingState(false)
+                  updateQueueUIOnPlay()
+                }
+              }
+              if(media.readyState >= 1){
+                restorePlayback()
+              } else {
+                const onceLoaded = ()=>{
+                  media.removeEventListener('loadedmetadata', onceLoaded)
+                  media.removeEventListener('canplay', onceLoaded)
+                  restorePlayback()
+                }
+                media.addEventListener('loadedmetadata', onceLoaded)
+                media.addEventListener('canplay', onceLoaded)
+                media.load()
+              }
+            }
+          }
+        }
+      }
+      try{ await window.electronAPI.clearPlaybackState() }catch(_){ }
+    }catch(_){ }
+    try{ syncCollectionsWithServer() }catch(_){ }
+  })
   mountQueueUI()
   try{
     const settingsInit = ()=>{

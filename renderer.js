@@ -212,41 +212,95 @@ function initializeApp() {
 }
 
 let backgroundAudio = null;
+let backgroundState = null;
 async function resumePlaybackIfAny() {
     try {
         const res = await window.electronAPI.getPlaybackState();
         if (!res || !res.success || !res.state) return;
         const state = res.state;
         if (!Array.isArray(state.queue) || state.queue.length === 0) return;
+        backgroundState = {
+            index: typeof state.index === 'number' ? state.index : 0,
+            queue: state.queue.slice(),
+            time: typeof state.time === 'number' ? Math.max(0, state.time) : 0,
+            paused: state.handoff === 'player_to_main' ? !!state.paused : true,
+            volume: typeof state.volume === 'number' ? Math.max(0, Math.min(1, state.volume)) : 1,
+            isVideo: false,
+            handoff: state.handoff || null
+        };
         if (!backgroundAudio) {
             backgroundAudio = document.createElement('audio');
             backgroundAudio.style.display = 'none';
             document.body.appendChild(backgroundAudio);
+            backgroundAudio.addEventListener('ended', async () => {
+                try {
+                    if (!backgroundState || !Array.isArray(backgroundState.queue) || backgroundState.queue.length === 0) return;
+                    let idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+                    idx += 1;
+                    if (idx >= backgroundState.queue.length) {
+                        backgroundState.index = backgroundState.queue.length - 1;
+                        backgroundState.time = 0;
+                        backgroundState.paused = true;
+                        try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                        return;
+                    }
+                    backgroundState.index = idx;
+                    backgroundState.time = 0;
+                    backgroundState.paused = false;
+                    const nextItem = backgroundState.queue[backgroundState.index];
+                    if (!nextItem) return;
+                    const nextUrl = await window.electronAPI.pathToFileURL(nextItem.localPath);
+                    if (!nextUrl) return;
+                    if (backgroundAudio.src !== nextUrl) backgroundAudio.src = nextUrl;
+                    try { backgroundAudio.load(); } catch (_) {}
+                    backgroundAudio.currentTime = 0;
+                    try { await backgroundAudio.play(); } catch (_) {
+                        backgroundState.paused = true;
+                    }
+                    try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                } catch (_) {}
+            });
         }
-        const item = state.queue[state.index] || state.queue[0];
+        const idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+        const item = backgroundState.queue[idx] || backgroundState.queue[0];
         const fileUrl = await window.electronAPI.pathToFileURL(item.localPath);
         if (!fileUrl) return;
         if (backgroundAudio.src !== fileUrl) backgroundAudio.src = fileUrl;
         try { backgroundAudio.load(); } catch (_) {}
-        if (typeof state.volume === 'number') backgroundAudio.volume = Math.max(0, Math.min(1, state.volume));
-        if (typeof state.time === 'number') {
-            const seekTo = Math.max(0, state.time);
+        backgroundAudio.volume = backgroundState.volume;
+        if (typeof backgroundState.time === 'number') {
+            const seekTo = Math.max(0, backgroundState.time);
             const setTime = () => {
                 try { backgroundAudio.currentTime = seekTo; } catch(_) {}
             };
             if (isNaN(backgroundAudio.duration)) {
-                backgroundAudio.addEventListener('loadedmetadata', function once(){
+                const once = () => {
                     backgroundAudio.removeEventListener('loadedmetadata', once);
                     setTime();
-                });
+                };
+                backgroundAudio.addEventListener('loadedmetadata', once);
             } else {
                 setTime();
             }
         }
-        if (!state.paused) {
-            try { await backgroundAudio.play(); } catch (_) {}
+        if (!backgroundState.paused && state.handoff === 'player_to_main') {
+            try { await backgroundAudio.play(); } catch (_) {
+                backgroundState.paused = true;
+            }
         }
-        try { await window.electronAPI.clearPlaybackState(); } catch (_) {}
+        try {
+            const saved = {
+                index: backgroundState.index,
+                queue: backgroundState.queue,
+                time: backgroundState.time,
+                paused: backgroundState.paused,
+                volume: backgroundState.volume,
+                isVideo: false,
+                handoff: 'main_active'
+            };
+            await window.electronAPI.savePlaybackState(saved);
+            backgroundState = saved;
+        } catch (_) {}
     } catch (_) {}
 }
 
@@ -282,14 +336,90 @@ function setupEventListeners() {
         }
     });
     
-    window.addEventListener('keydown', (e) => {
+    window.addEventListener('keydown', async (e) => {
         const tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         if (e.ctrlKey && String(e.key).toLowerCase() === 'h') {
             e.preventDefault();
             switchTab('overview');
         }
+        if (e.ctrlKey && String(e.key).toLowerCase() === 's') {
+            e.preventDefault();
+            try {
+                if (!backgroundState || !Array.isArray(backgroundState.queue) || backgroundState.queue.length === 0) return;
+                if (!backgroundAudio) return;
+                let idx = typeof backgroundState.index === 'number' ? backgroundState.index : 0;
+                idx += 1;
+                if (idx >= backgroundState.queue.length) idx = 0;
+                backgroundState.index = idx;
+                backgroundState.time = 0;
+                const item = backgroundState.queue[idx];
+                const fileUrl = await window.electronAPI.pathToFileURL(item.localPath);
+                if (!fileUrl) return;
+                if (backgroundAudio.src !== fileUrl) backgroundAudio.src = fileUrl;
+                try { backgroundAudio.load(); } catch (_) {}
+                backgroundAudio.currentTime = 0;
+                if (!backgroundAudio.paused) {
+                    try { await backgroundAudio.play(); } catch (_) {}
+                }
+                backgroundState.paused = backgroundAudio.paused;
+                backgroundState.volume = backgroundAudio.volume;
+                try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+            } catch (_) {}
+        }
+        if (e.ctrlKey && String(e.key).toLowerCase() === 'r') {
+            e.preventDefault();
+            try {
+                if (backgroundAudio && backgroundAudio.src) {
+                    backgroundAudio.currentTime = 0;
+                    if (backgroundAudio.paused) {
+                        try { await backgroundAudio.play(); } catch (_) {}
+                    }
+                    if (backgroundState) {
+                        backgroundState.time = 0;
+                        backgroundState.paused = backgroundAudio.paused;
+                        backgroundState.volume = backgroundAudio.volume;
+                        try { await window.electronAPI.savePlaybackState(backgroundState); } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+        }
     });
+    
+    try {
+        const btn = document.getElementById('playerModeBtn');
+        if (btn) {
+            btn.onclick = async () => {
+                try {
+                    if (backgroundState && backgroundAudio) {
+                        try {
+                            if (!isNaN(backgroundAudio.currentTime)) backgroundState.time = backgroundAudio.currentTime;
+                        } catch (_) {}
+                        try { backgroundState.paused = backgroundAudio.paused; } catch (_) {}
+                        try { backgroundState.volume = backgroundAudio.volume; } catch (_) {}
+                    }
+                    if (backgroundAudio) {
+                        try { backgroundAudio.pause(); } catch (_) {}
+                        backgroundAudio.src = '';
+                        try { backgroundAudio.load(); } catch (_) {}
+                    }
+                    if (backgroundState && Array.isArray(backgroundState.queue) && backgroundState.queue.length>0) {
+                        const updated = {
+                            index: typeof backgroundState.index === 'number' ? backgroundState.index : 0,
+                            queue: backgroundState.queue,
+                            time: typeof backgroundState.time === 'number' ? Math.max(0, backgroundState.time) : 0,
+                            paused: !!backgroundState.paused,
+                            volume: typeof backgroundState.volume === 'number' ? Math.max(0, Math.min(1, backgroundState.volume)) : 1,
+                            isVideo: false,
+                            handoff: 'main_to_player'
+                        };
+                        await window.electronAPI.savePlaybackState(updated);
+                    }
+                } catch (_) {}
+                window.electronAPI.openPlayerMode();
+            };
+        }
+    } catch (_) {}
 
     elements.syncBtn.addEventListener('click', startSyncOptimized);
     elements.checkUpdatesBtn.addEventListener('click', checkUpdates);

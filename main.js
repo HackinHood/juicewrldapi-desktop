@@ -1176,6 +1176,8 @@ app.whenReady().then(() => {
     console.error('[App] Failed to initialize local storage');
   }
   
+  try { store.delete('playbackState'); } catch (_) {}
+  
   applyStartupSettings();
   
   createWindow();
