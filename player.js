@@ -37,6 +37,11 @@ let collectionsCacheKey = null
 let nowPlayingUpdateInterval = null
 let authState = null
 let favorites = new Set()
+let crossfadeEnabled = false
+let crossfadeDuration = 0
+let crossfadeActive = false
+let crossfadeInterval = null
+let crossfadeAudio = null
 
 function computeCollectionsCacheKey(){
   let maxM = 0
@@ -1836,6 +1841,7 @@ function clearPlaybar(){
   try{ els.audio.pause() }catch(_){ }
   try{ els.video.pause() }catch(_){ }
   try{ els.videoDisplay.pause() }catch(_){ }
+  cancelCrossfade()
   
   els.videoContainer.classList.add('hidden')
   els.videoPip.classList.add('hidden')
@@ -2243,6 +2249,7 @@ function pushPlayHistory(item){
 }
 
 function togglePlay(){
+  cancelCrossfade()
   const media = getMedia()
   if(media.src && !media.src.startsWith('blob:') && media.readyState < 2){ try{ media.load() }catch(_){ } }
   if(media.paused){ 
@@ -2319,7 +2326,13 @@ function next(){
   playIndex(currentIndex)
 }
 
+function userNext(){
+  cancelCrossfade()
+  next()
+}
+
 function prev(){
+  cancelCrossfade()
   if(queue.length===0) return
   if(currentIndex<=0){
     playIndex(0)
@@ -2337,6 +2350,7 @@ function bindMediaEvents(media){
       intendedPosition = media.currentTime
     }
     try{ updateMediaSessionState() }catch(_){ }
+    try{ maybeScheduleCrossfade(media) }catch(_){ }
   })
   media.addEventListener('loadedmetadata',()=>{
     els.duration.textContent = formatTime(media.duration)
@@ -2388,6 +2402,156 @@ function onVolume(e){
   if(els.videoPipDisplay) {
     els.videoPipDisplay.volume = volume
   }
+  if(crossfadeAudio){
+    crossfadeAudio.volume = volume
+  }
+}
+
+function cancelCrossfade(){
+  crossfadeActive = false
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  if(crossfadeAudio){
+    try{ crossfadeAudio.pause() }catch(_){}
+  }
+}
+
+function maybeScheduleCrossfade(media){
+  if(!crossfadeEnabled) return
+  if(isCurrentVideo()) return
+  if(!media) return
+  if(media.paused) return
+  if(!Number.isFinite(media.duration) || media.duration<=0) return
+  if(repeatMode === 2) return
+  if(queue.length === 0) return
+  if(currentIndex<0 || currentIndex>=queue.length) return
+  const currentItem = queue[currentIndex]
+  let targetIndex = -1
+  if(currentIndex<queue.length-1){
+    targetIndex = currentIndex+1
+  } else if(repeatMode===1 && queue.length>1){
+    targetIndex = 0
+  }
+  if(targetIndex<0 || targetIndex>=queue.length) return
+  const nextItem = queue[targetIndex]
+  if(!currentItem || !nextItem) return
+  if(!currentItem.isAudio || currentItem.isVideo) return
+  if(!nextItem.isAudio || nextItem.isVideo) return
+  if(crossfadeActive) return
+  const d = Math.max(1, Math.min(10, crossfadeDuration||0))
+  const remaining = media.duration - media.currentTime
+  if(remaining <= d && remaining > 0){
+    startCrossfadeTransition(media, d)
+  }
+}
+
+function startCrossfadeTransition(media, durationSeconds){
+  const m = media || getMedia()
+  if(!m) return
+  if(m.paused) return
+  if(!crossfadeEnabled) return
+  if(isCurrentVideo()) return
+  if(queue.length === 0) return
+  const d = Math.max(1, Math.min(10, durationSeconds||crossfadeDuration||0))
+  if(!crossfadeAudio){
+    try{
+      crossfadeAudio = document.createElement('audio')
+      crossfadeAudio.preload = 'metadata'
+      crossfadeAudio.style.display = 'none'
+      document.body.appendChild(crossfadeAudio)
+    }catch(_){}
+  }
+  if(!crossfadeAudio) return
+  const baseVolume = m.volume
+  const durationMs = Math.max(1000, Math.floor(d*1000))
+  const stepMs = 50
+  try{
+    crossfadeAudio.src = m.src
+    if(Number.isFinite(m.currentTime)){
+      crossfadeAudio.currentTime = m.currentTime
+    }
+  }catch(_){}
+  try{
+    crossfadeAudio.volume = baseVolume
+    crossfadeAudio.muted = false
+    crossfadeAudio.play().catch(()=>{})
+  }catch(_){}
+  try{ m.pause() }catch(_){}
+  crossfadeActive = true
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  let elapsed = 0
+  crossfadeInterval = setInterval(()=>{
+    if(!crossfadeActive){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      return
+    }
+    elapsed += stepMs
+    if(elapsed >= durationMs){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      if(crossfadeAudio){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+      crossfadeActive = false
+    }
+  }, stepMs)
+  startNextTrackWithFadeIn(baseVolume, durationMs, stepMs)
+}
+
+function startNextTrackWithFadeIn(baseVolume, halfMs, stepMs){
+  if(queue.length === 0){
+    crossfadeActive = false
+    return
+  }
+  next()
+  const media = getMedia()
+  if(!media){
+    crossfadeActive = false
+    return
+  }
+  media.volume = 0
+  let elapsedIn = 0
+  const totalMs = halfMs
+  const step = stepMs
+  if(crossfadeInterval){
+    clearInterval(crossfadeInterval)
+    crossfadeInterval = null
+  }
+  crossfadeInterval = setInterval(()=>{
+    if(!crossfadeActive){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      return
+    }
+    elapsedIn += step
+    const t = Math.min(1, elapsedIn/totalMs)
+    let vIn = baseVolume * t
+    let vOut = baseVolume * (1 - t)
+    if(vIn > baseVolume) vIn = baseVolume
+    if(vOut < 0) vOut = 0
+    media.volume = vIn
+    if(crossfadeAudio){
+      crossfadeAudio.volume = vOut
+      if(vOut === 0){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+    }
+    if(elapsedIn >= totalMs){
+      clearInterval(crossfadeInterval)
+      crossfadeInterval = null
+      media.volume = baseVolume
+      if(crossfadeAudio){
+        try{ crossfadeAudio.pause() }catch(_){}
+      }
+      crossfadeActive = false
+    }
+  }, step)
 }
 
 function applySearch(){
@@ -2424,7 +2588,7 @@ function init(){
     window.electronAPI.openMainUI()
   }
   els.playPause.onclick = togglePlay
-  els.next.onclick = next
+  els.next.onclick = userNext
   els.prev.onclick = prev
   if(els.repeatBtn){
     els.repeatBtn.onclick = toggleRepeat
@@ -2468,7 +2632,7 @@ function init(){
       const hasCurrent = currentIndex>=0 && currentIndex < queue.length
       pipMode = false
       if(hasCurrent){
-        next()
+        userNext()
       } else {
         clearPlaybar()
       }
@@ -2566,7 +2730,7 @@ function init(){
     if(e.code==='ArrowUp'){ const v=Math.min(1,(els.audio.volume+0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.code==='ArrowDown'){ const v=Math.max(0,(els.audio.volume-0.05)); els.audio.volume=v; els.video.volume=v; els.volume.value=String(v) }
     if(e.ctrlKey && String(e.key).toLowerCase()==='h'){ e.preventDefault(); window.electronAPI.openMainUI() }
-    if(e.ctrlKey && String(e.key).toLowerCase()==='s'){ e.preventDefault(); next() }
+    if(e.ctrlKey && String(e.key).toLowerCase()==='s'){ e.preventDefault(); userNext() }
     if(e.ctrlKey && String(e.key).toLowerCase()==='v'){ 
       e.preventDefault()
       try{
@@ -2706,6 +2870,9 @@ function init(){
         const cid = (s && s.discordRpcClientId) ? String(s.discordRpcClientId) : '1401436107765452860'
         window.electronAPI.discordSetEnabled(enabled)
         if(enabled){ window.electronAPI.discordInit(cid) }
+        crossfadeEnabled = !!(s && s.crossfadeEnabled)
+        const d = s && typeof s.crossfadeDuration === 'number' ? s.crossfadeDuration : 5
+        crossfadeDuration = Math.max(1, Math.min(10, d))
       }).catch(()=>{})
     }
     settingsInit()

@@ -379,6 +379,23 @@
                         </div>
 
                         <div class="settings-section">
+                            <h3>Playback Settings</h3>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="crossfadeEnabled">
+                                    Enable Crossfade
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">Crossfade duration:</label>
+                                <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
+                                    <input type="range" id="crossfadeDuration" min="1" max="10" step="1" value="5">
+                                    <span id="crossfadeDurationValue" style="min-width: 3rem; text-align: right;">5s</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
                             <h3>Folder Selection</h3>
                             <div class="setting-item">
                                 <label class="setting-label">Select Root Folders to Sync:</label>

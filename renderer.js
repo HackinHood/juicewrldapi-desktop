@@ -114,11 +114,14 @@ const elements = {
     maxTransfers: document.getElementById('maxTransfers'),
     logLevel: document.getElementById('logLevel'),
     serverUrl: document.getElementById('serverUrl'),
+    crossfadeEnabled: document.getElementById('crossfadeEnabled'),
+    crossfadeDuration: document.getElementById('crossfadeDuration'),
+    crossfadeDurationValue: document.getElementById('crossfadeDurationValue'),
     saveSettingsBtn: document.getElementById('saveSettingsBtn'),
             resetSettingsBtn: document.getElementById('resetSettingsBtn'),
         exportSettingsBtn: document.getElementById('exportSettingsBtn'),
         importSettingsBtn: document.getElementById('importSettingsBtn'),
-    unsavedBadge: document.getElementById('unsavedBadge'),
+        unsavedBadge: document.getElementById('unsavedBadge'),
     
     storagePath: document.getElementById('storagePath'),
     changeStoragePathBtn: document.getElementById('changeStoragePathBtn'),
@@ -461,6 +464,18 @@ function setupEventListeners() {
         elements.maxTransfers.addEventListener('change', markDirty);
         elements.logLevel.addEventListener('change', markDirty);
         elements.serverUrl.addEventListener('input', markDirty);
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.addEventListener('change', markDirty);
+        }
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.addEventListener('input', () => {
+                markDirty();
+                const v = parseInt(elements.crossfadeDuration.value) || 5;
+                if (elements.crossfadeDurationValue) {
+                    elements.crossfadeDurationValue.textContent = v + 's';
+                }
+            });
+        }
         
         elements.autoSyncEnabled.addEventListener('change', () => {
             elements.autoSyncInterval.disabled = !elements.autoSyncEnabled.checked;
@@ -2138,6 +2153,16 @@ async function loadSettings() {
         elements.maxTransfers.value = currentSettings.maxTransfers;
         elements.logLevel.value = currentSettings.logLevel;
         elements.serverUrl.value = currentSettings.serverUrl;
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.checked = !!currentSettings.crossfadeEnabled;
+        }
+        const cfDuration = typeof currentSettings.crossfadeDuration === 'number' ? currentSettings.crossfadeDuration : 5;
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.value = String(cfDuration);
+        }
+        if (elements.crossfadeDurationValue) {
+            elements.crossfadeDurationValue.textContent = cfDuration + 's';
+        }
         
         await loadStoragePathInfo();
         
@@ -2499,7 +2524,9 @@ async function saveSettings() {
             serverUrl: elements.serverUrl.value,
             selectedFolders: Array.from(selectedFolders),
             customStoragePath: latest.customStoragePath,
-            lastActiveTab: currentTab
+            lastActiveTab: currentTab,
+            crossfadeEnabled: elements.crossfadeEnabled ? elements.crossfadeEnabled.checked : !!latest.crossfadeEnabled,
+            crossfadeDuration: elements.crossfadeDuration ? parseInt(elements.crossfadeDuration.value) : (latest.crossfadeDuration || 5)
         };
         
         await window.electronAPI.saveSettings(settings);
@@ -2529,6 +2556,15 @@ async function resetSettings() {
         elements.maxTransfers.value = '3';
         elements.logLevel.value = 'info';
         elements.serverUrl.value = 'https://m.juicewrldapi.com';
+        if (elements.crossfadeEnabled) {
+            elements.crossfadeEnabled.checked = false;
+        }
+        if (elements.crossfadeDuration) {
+            elements.crossfadeDuration.value = '5';
+        }
+        if (elements.crossfadeDurationValue) {
+            elements.crossfadeDurationValue.textContent = '5s';
+        }
         
         selectedFolders.clear();
         
@@ -2542,7 +2578,9 @@ async function resetSettings() {
             logLevel: 'info',
             serverUrl: 'https://m.juicewrldapi.com',
             selectedFolders: [],
-            lastActiveTab: 'overview'
+            lastActiveTab: 'overview',
+            crossfadeEnabled: false,
+            crossfadeDuration: 5
         };
         
         try {

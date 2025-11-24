@@ -1387,6 +1387,8 @@ ipcMain.handle('get-settings', () => {
     maxTransfers: 3,
     logLevel: 'info',
     serverUrl: 'https://m.juicewrldapi.com',
+    crossfadeEnabled: false,
+    crossfadeDuration: 5,
     windowWidth: 1200,
     windowHeight: 800,
     windowX: undefined,
@@ -1415,6 +1417,8 @@ ipcMain.handle('save-settings', (event, settings) => {
     selectedFolders: Array.isArray(settings.selectedFolders) ? settings.selectedFolders : [],
     customStoragePath: typeof settings.customStoragePath === 'string' ? settings.customStoragePath : undefined,
     lastActiveTab: ['overview', 'local-files', 'server-files', 'sync', 'settings', 'account'].includes(settings.lastActiveTab) ? settings.lastActiveTab : 'overview',
+    crossfadeEnabled: Boolean(settings.crossfadeEnabled),
+    crossfadeDuration: Math.max(1, Math.min(10, parseInt(settings.crossfadeDuration) || 5)),
     authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined
   };
 
