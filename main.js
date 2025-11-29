@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, Tray, nativeImage } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const Store = require('electron-store');
 const https = require('https');
 const http = require('http');
@@ -459,7 +460,9 @@ function ensureSyncWindow() {
         preload: path.join(__dirname, 'preload.js')
       }
     })
-    syncWindow.loadFile('index.html?sync=1')
+    const indexPath = path.join(__dirname, 'index.html')
+    const fileUrl = pathToFileURL(indexPath).href + '?sync=1'
+    syncWindow.loadURL(fileUrl)
     syncWindow.on('closed', () => { syncWindow = null })
   } catch (_) {}
 }
@@ -1223,6 +1226,18 @@ function applyStartupSettings() {
   }
 }
 
+if (!app.isReady()) {
+  try {
+    const cachePath = path.join(app.getPath('userData'), 'cache');
+    if (!fs.existsSync(cachePath)) {
+      fs.mkdirSync(cachePath, { recursive: true });
+    }
+    app.setPath('cache', cachePath);
+    app.commandLine.appendSwitch('disk-cache-dir', cachePath);
+    app.commandLine.appendSwitch('disk-cache-size', '52428800');
+  } catch (_) {}
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.juicewrldapi.desktop');
@@ -1419,7 +1434,10 @@ ipcMain.handle('save-settings', (event, settings) => {
     lastActiveTab: ['overview', 'local-files', 'server-files', 'sync', 'settings', 'account'].includes(settings.lastActiveTab) ? settings.lastActiveTab : 'overview',
     crossfadeEnabled: Boolean(settings.crossfadeEnabled),
     crossfadeDuration: Math.max(1, Math.min(10, parseInt(settings.crossfadeDuration) || 5)),
-    authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined
+    authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined,
+    playerVolume: typeof settings.playerVolume === 'number'
+      ? Math.max(0, Math.min(1, settings.playerVolume))
+      : (typeof existingSettings.playerVolume === 'number' ? existingSettings.playerVolume : undefined)
   };
 
   const sanitized = Object.fromEntries(Object.entries(validatedSettings).filter(([_, v]) => v !== undefined));

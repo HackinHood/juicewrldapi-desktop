@@ -384,8 +384,9 @@ let lastView = null
 
 function updateExistingCards(){
   if(currentView === 'albums' || currentView === 'home' || currentView === 'music' || currentView === 'videos' || currentView === 'favorites' || currentView === 'artists'){
-    if(!cachedCards || lastView !== currentView){
-      cachedCards = document.querySelectorAll('.card')
+    const currentCards = document.querySelectorAll('.card')
+    if(!cachedCards || lastView !== currentView || cachedCards.length !== currentCards.length || !cachedCards.length){
+      cachedCards = currentCards
       lastView = currentView
     }
     
@@ -402,6 +403,10 @@ function updateExistingCards(){
           if(card.__updateThumbnail()) updated++
         }
       }
+    }
+    
+    if(updated > 0 && cachedCards.length !== currentCards.length){
+      cachedCards = currentCards
     }
   }
 }
@@ -450,7 +455,7 @@ function render(){
   inDetailView = false
   cachedCards = null
   try{ restorePlaybarState() }catch(_){ }
-  if(currentView==='home') return renderHome()
+  if(currentView==='home') { renderHome(); return }
   if(currentView==='search') return renderSearch()
   if(currentView==='albums') return renderAlbums()
   if(currentView==='artists') return renderArtists()
@@ -699,7 +704,7 @@ function renderVirtualCollections(entries, kind){
   calc()
 }
 
-function renderHome(){
+async function renderHome(){
   teardownVirtualizer()
   els.library.innerHTML = ''
   els.library.style.display = ''
@@ -710,11 +715,43 @@ function renderHome(){
   const recent = sampleSize > 0 ? [...libraryItems.slice(0, sampleSize)].sort((a,b)=> (b.mtimeMs||0)-(a.mtimeMs||0)).slice(0,24) : []
   els.library.appendChild(title1)
   els.library.appendChild(row1)
+  
+  if(recent.length){
+    const visibleItems = recent.slice(0, 8)
+    const thumbnailPromises = visibleItems.map(it=>{
+      if(it && !it.thumbnail){
+        return window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs).then(p=>{
+          if(p) it.thumbnail = p
+          return p
+        }).catch(()=>null)
+      }
+      return Promise.resolve(it.thumbnail)
+    })
+    await Promise.all(thumbnailPromises)
+    
+    recent.forEach(it=>{
+      if(it && !it.thumbnail && !visibleItems.includes(it)){
+        window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs).then(p=>{
+          if(p){
+            it.thumbnail = p
+            try{ scheduleCardUpdate() }catch(_){}
+          }
+        }).catch(()=>{})
+      }
+    })
+  }
+  
   let i1 = 0
   function fillRecent(){
     const end = Math.min(recent.length, i1+8)
     for(; i1<end; i1++) row1.appendChild(buildCard(recent[i1], recent, { playScope: 'single' }))
-    if(i1<recent.length) requestAnimationFrame(fillRecent)
+    if(i1<recent.length) {
+      requestAnimationFrame(fillRecent)
+    } else {
+      setTimeout(()=>{
+        try{ scheduleCardUpdate() }catch(_){}
+      }, 100)
+    }
   }
   fillRecent()
   
@@ -779,6 +816,7 @@ function renderHome(){
     const card = buildCollectionCard(pl.name, items, 'album')
     row4.appendChild(card)
   })
+  try{ scheduleCardUpdate() }catch(_){ }
 }
 
 function buildCard(it, list, options){
@@ -2392,7 +2430,7 @@ function onSeek(e){
   }
 }
 
-function onVolume(e){
+async function onVolume(e){
   const volume = parseFloat(e.target.value)
   els.audio.volume = volume
   els.video.volume = volume
@@ -2405,6 +2443,11 @@ function onVolume(e){
   if(crossfadeAudio){
     crossfadeAudio.volume = volume
   }
+  try {
+    const settings = await window.electronAPI.getSettings()
+    settings.playerVolume = volume
+    await window.electronAPI.saveSettings(settings)
+  } catch (_) {}
 }
 
 function cancelCrossfade(){
@@ -2605,6 +2648,17 @@ function init(){
   els.seek.onchange = onSeek
   els.volume.oninput = onVolume
   els.volume.onchange = onVolume
+  
+  window.electronAPI.getSettings().then(async (settings)=>{
+    try {
+      const savedVolume = typeof settings.playerVolume === 'number' ? Math.max(0, Math.min(1, settings.playerVolume)) : 1
+      els.audio.volume = savedVolume
+      els.video.volume = savedVolume
+      els.volume.value = String(savedVolume)
+      if(els.videoDisplay) els.videoDisplay.volume = savedVolume
+      if(els.videoPipDisplay) els.videoPipDisplay.volume = savedVolume
+    } catch (_) {}
+  }).catch(_ => {})
   els.search.oninput = applySearch
   if(els.favoriteBtn){
     els.favoriteBtn.onclick = ()=>{
@@ -2820,11 +2874,23 @@ function init(){
             if(media && url){
               if(media.src !== url) media.src = url
               try{ media.load() }catch(_){ }
+              let volumeToUse = 1
               if(typeof state.volume==='number') {
-                const restoredVolume = Math.max(0, Math.min(1, state.volume))
-                media.volume = restoredVolume
-                els.volume.value = String(restoredVolume)
+                volumeToUse = Math.max(0, Math.min(1, state.volume))
+              } else {
+                try {
+                  const settings = await window.electronAPI.getSettings()
+                  if(typeof settings.playerVolume === 'number') {
+                    volumeToUse = Math.max(0, Math.min(1, settings.playerVolume))
+                  }
+                } catch (_) {}
               }
+              media.volume = volumeToUse
+              els.audio.volume = volumeToUse
+              els.video.volume = volumeToUse
+              els.volume.value = String(volumeToUse)
+              if(els.videoDisplay) els.videoDisplay.volume = volumeToUse
+              if(els.videoPipDisplay) els.videoPipDisplay.volume = volumeToUse
               let thumbnail = null
               const serverPath = currentItem.path || currentItem.localPath || ''
               if(serverPath){
@@ -2876,6 +2942,18 @@ function init(){
               }
             }
           }
+        } else {
+          try {
+            const settings = await window.electronAPI.getSettings()
+            if(typeof settings.playerVolume === 'number') {
+              const savedVolume = Math.max(0, Math.min(1, settings.playerVolume))
+              els.audio.volume = savedVolume
+              els.video.volume = savedVolume
+              els.volume.value = String(savedVolume)
+              if(els.videoDisplay) els.videoDisplay.volume = savedVolume
+              if(els.videoPipDisplay) els.videoPipDisplay.volume = savedVolume
+            }
+          } catch (_) {}
         }
       }
       try{ await window.electronAPI.clearPlaybackState() }catch(_){ }
