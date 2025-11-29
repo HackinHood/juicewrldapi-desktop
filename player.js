@@ -2580,7 +2580,7 @@ function init(){
         paused: media ? media.paused : true,
         volume: media ? media.volume : 1,
         isVideo: isCurrentVideo(),
-        queue: queue.map(it=>({ title: it.title, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio })),
+        queue: queue.map(it=>({ title: it.title, artist: it.artist, album: it.album, path: it.path, localPath: it.localPath, isVideo: it.isVideo, isAudio: it.isAudio })),
         handoff: 'player_to_main'
       } : null
       await window.electronAPI.savePlaybackState(state)
@@ -2820,8 +2820,28 @@ function init(){
             if(media && url){
               if(media.src !== url) media.src = url
               try{ media.load() }catch(_){ }
-              if(typeof state.volume==='number') media.volume = Math.max(0, Math.min(1, state.volume))
-              updateNowPlaying(currentItem)
+              if(typeof state.volume==='number') {
+                const restoredVolume = Math.max(0, Math.min(1, state.volume))
+                media.volume = restoredVolume
+                els.volume.value = String(restoredVolume)
+              }
+              let thumbnail = null
+              const serverPath = currentItem.path || currentItem.localPath || ''
+              if(serverPath){
+                try{
+                  const settings = await window.electronAPI.getSettings()
+                  const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
+                  const norm = base.endsWith('/') ? base.slice(0,-1) : base
+                  thumbnail = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
+                }catch(_){ }
+              }
+              updateNowPlaying({
+                title: currentItem.title || 'Unknown',
+                artist: currentItem.artist || 'Unknown Artist',
+                album: currentItem.album || 'Unknown Album',
+                thumbnail: thumbnail,
+                isVideo: currentItem.isVideo || false
+              })
               refreshQueuePanel()
               const restorePlayback = ()=>{
                 if(typeof state.time==='number'){
