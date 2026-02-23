@@ -9,7 +9,8 @@ const state = {
   enabled: true,
   reconnectTimer: null,
   retryDelayMs: 5000,
-  lastErrorMessage: null
+  lastErrorMessage: null,
+  setActivityPromise: Promise.resolve()
 }
 
 function setEnabled(enabled){
@@ -116,10 +117,8 @@ function buildActivity(payload){
     type: 2
   }
   if(typeof payload.startTimestamp === 'number' && typeof payload.endTimestamp === 'number'){
-    activity.timestamps = {
-      start: Math.floor(payload.startTimestamp/1000),
-      end: Math.floor(payload.endTimestamp/1000)
-    }
+    activity.startTimestamp = Math.floor(payload.startTimestamp / 1000)
+    activity.endTimestamp = Math.floor(payload.endTimestamp / 1000)
   }
   if(payload.largeImageKey){ activity.largeImageKey = payload.largeImageKey }
   if(payload.largeImageText){ activity.largeImageText = payload.largeImageText }
@@ -137,13 +136,14 @@ function updatePresence(payload){
     try{ console.log('[DiscordRPC] update', activity) }catch(_){ }
     state.lastActivity = activity
     if(state.client && state.connected){
-      try{ 
-        state.client.setActivity(activity).then(()=>{
-          console.log('[DiscordRPC] activity updated successfully')
+      const doSet = ()=>{
+        return state.client.setActivity(activity).then(()=>{
+          try{ console.log('[DiscordRPC] activity updated successfully') }catch(_){ }
         }).catch((e)=>{
-          console.log('[DiscordRPC] setActivity error', e && e.message)
+          try{ console.log('[DiscordRPC] setActivity error', e && e.message) }catch(_){ }
         })
-      }catch(_){ }
+      }
+      state.setActivityPromise = state.setActivityPromise.then(doSet, doSet).then(()=>undefined)
       return true
     }
     if(!state.client && state.applicationId && RPC){ try{ init(state.applicationId) }catch(_){ } }
@@ -175,5 +175,4 @@ function getStatus(){
 }
 
 module.exports = { init, updatePresence, clear, setEnabled, getStatus }
-
 
