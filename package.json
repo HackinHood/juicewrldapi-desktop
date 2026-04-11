@@ -1,6 +1,6 @@
 {
   "name": "juicewrldapi-desktop",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "JuiceWRLD API Desktop Application",
   "main": "main.js",
   "scripts": {

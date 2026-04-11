@@ -560,7 +560,7 @@ async function checkForAppUpdateOnStartup() {
                 elements.updateBtn.classList.remove('has-update');
                 elements.updateBtn.classList.add('no-update');
                 if (elements.updateBtnText) {
-                    elements.updateBtnText.textContent = 'v' + (result.currentVersion || '0.0.5');
+                    elements.updateBtnText.textContent = 'v' + (result.currentVersion || '0.0.6');
                 }
             }
         }
@@ -575,7 +575,7 @@ function handleAppUpdate() {
 function showVersionDialog() {
     versionDialogOpen = true;
     const info = pendingUpdateInfo || {};
-    const currentV = info.currentVersion || '0.0.5';
+    const currentV = info.currentVersion || '0.0.6';
     const latestV = info.latestVersion || currentV;
     const hasUpdate = !!(info.updateAvailable && info.downloadUrl);
 
