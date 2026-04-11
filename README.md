@@ -26,7 +26,7 @@ JuiceWRLD-API Desktop is a cross‑platform Electron app for managing and playin
 Requirements:
 
 - Node.js 18+ and npm
-- Replace discord-rpc library with (this)[https://github.com/HackinHood/discord-rpc]
+- Replace discord-rpc library with [this](https://github.com/HackinHood/discord-rpc)
 
 Install and run in dev mode:
 
