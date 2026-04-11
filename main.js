@@ -1394,18 +1394,22 @@ app.whenReady().then(() => {
         }
       })
       if (process.platform === 'win32') {
+        const vbsPath = path.join(tempDir, 'juicewrld-update.vbs')
         const batPath = path.join(tempDir, 'juicewrld-update.cmd')
         const exePath = process.execPath
         const batContent = [
           '@echo off',
-          'ping 127.0.0.1 -n 4 > nul',
+          'timeout /t 3 /nobreak >nul 2>&1',
           `start "" /wait "${installerPath}" /S`,
           `start "" "${exePath}"`,
+          `del "${batPath}"`,
           `del "%~f0"`
         ].join('\r\n')
         fs.writeFileSync(batPath, batContent, 'utf8')
+        const vbsContent = `CreateObject("WScript.Shell").Run """${batPath}""", 0, False`
+        fs.writeFileSync(vbsPath, vbsContent, 'utf8')
         const { spawn } = require('child_process')
-        const child = spawn('cmd.exe', ['/c', batPath], {
+        const child = spawn('wscript.exe', [vbsPath], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true
