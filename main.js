@@ -874,23 +874,12 @@ function initializeLocalStorage() {
 function loadLocalMetadata() {
   try {
     const metadataPath = getMetadataPath();
-    console.log(`[Storage] loadLocalMetadata called, checking file: ${metadataPath}`);
-    console.log(`[Storage] File exists: ${fs.existsSync(metadataPath)}`);
-    
     if (fs.existsSync(metadataPath)) {
       const data = fs.readFileSync(metadataPath, 'utf8');
-      console.log(`[Storage] File content length: ${data.length} characters`);
-      console.log(`[Storage] File content preview: ${data.substring(0, 200)}...`);
-      
-      const parsed = JSON.parse(data);
-      console.log(`[Storage] Parsed metadata:`, parsed);
-      return parsed;
-    } else {
-      console.log(`[Storage] Metadata file does not exist, returning default`);
+      return JSON.parse(data);
     }
   } catch (error) {
     console.error(`[Storage] Failed to load metadata: ${error.message}`);
-    console.error(`[Storage] Error stack:`, error.stack);
   }
   return { files: {}, lastSync: null, syncCount: 0, totalSize: 0, version: '1.0' };
 }
@@ -1222,6 +1211,14 @@ function applyStartupSettings() {
   } catch (error) {
     console.error('[Settings] Failed to apply startup settings:', error.message);
   }
+
+  loadSongsTrackerIndex().then(() => {
+    console.log('[Tracker] Index loaded at startup:', songsTrackerIndex ? songsTrackerIndex.length : 0, 'songs');
+    startTrackerRefreshInterval();
+  }).catch((e) => {
+    console.error('[Tracker] Startup load failed:', e.message || e);
+    startTrackerRefreshInterval();
+  });
 }
 
 function fetchGitHubLatestRelease() {
@@ -1605,14 +1602,18 @@ function fetchJsonByUrl(urlStr) {
 
 const TRACKER_API_BASE = 'https://juicewrldapi.com';
 const TRACKER_INDEX_TTL_MS = 60 * 60 * 1000;
+const TRACKER_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+let trackerRefreshTimer = null;
 
-async function loadSongsTrackerIndex() {
-  const lastFetched = store.get('songsTrackerIndexLastFetched', 0);
-  if (Date.now() - lastFetched < TRACKER_INDEX_TTL_MS) {
-    const cached = store.get('songsTrackerIndexCache', null);
-    if (Array.isArray(cached) && cached.length > 0) {
-      songsTrackerIndex = cached;
-      return cached;
+async function loadSongsTrackerIndex(force) {
+  if (!force) {
+    const lastFetched = store.get('songsTrackerIndexLastFetched', 0);
+    if (Date.now() - lastFetched < TRACKER_INDEX_TTL_MS) {
+      const cached = store.get('songsTrackerIndexCache', null);
+      if (Array.isArray(cached) && cached.length > 0) {
+        songsTrackerIndex = cached;
+        return cached;
+      }
     }
   }
   const base = TRACKER_API_BASE.replace(/\/$/, '');
@@ -1628,6 +1629,15 @@ async function loadSongsTrackerIndex() {
   store.set('songsTrackerIndexLastFetched', Date.now());
   store.set('songsTrackerIndexCache', all);
   return all;
+}
+
+function startTrackerRefreshInterval() {
+  if (trackerRefreshTimer) return;
+  trackerRefreshTimer = setInterval(() => {
+    loadSongsTrackerIndex(true).catch((e) => {
+      console.error('[Tracker] Background refresh failed:', e.message || e);
+    });
+  }, TRACKER_REFRESH_INTERVAL_MS);
 }
 
 function normalizePath(p) {
@@ -1678,6 +1688,16 @@ ipcMain.handle('get-tracker-index', async () => {
   } catch (e) {
     console.error('[Tracker] get-tracker-index failed:', e);
     return [];
+  }
+});
+
+ipcMain.handle('refresh-tracker-index', async () => {
+  try {
+    await loadSongsTrackerIndex(true);
+    return { success: true, count: songsTrackerIndex ? songsTrackerIndex.length : 0 };
+  } catch (e) {
+    console.error('[Tracker] refresh-tracker-index failed:', e);
+    return { success: false, error: e.message || 'Unknown error' };
   }
 });
 
@@ -2612,12 +2632,7 @@ ipcMain.handle('remove-local-file', async (event, filepath) => {
 
 ipcMain.handle('get-local-files', () => {
   try {
-    console.log('[Storage] getLocalFiles called');
-    
     const metadata = loadLocalMetadata();
-    console.log('[Storage] Loaded metadata:', metadata);
-    console.log('[Storage] Metadata files count:', Object.keys(metadata.files || {}).length);
-    
     const files = Object.entries(metadata.files || {}).map(([filepath, fileInfo]) => ({
       filename: fileInfo.filename || path.basename(filepath),
       filepath,
@@ -2632,7 +2647,6 @@ ipcMain.handle('get-local-files', () => {
     displayAlbum: fileInfo.displayAlbum || null,
     displayAlbumArtist: fileInfo.displayAlbumArtist || null
     }));
-    console.log(`[Storage] Returning ${files.length} local files (no fs checks)`);
     return { files, totalCount: files.length };
   } catch (error) {
     console.error(`[Storage] Failed to get local files: ${error.message}`);

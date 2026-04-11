@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateVideoThumbnail: (localPath, mtimeMs) => ipcRenderer.invoke('generate-video-thumbnail', localPath, mtimeMs),
   getTrackerInfoByPath: (filePath) => ipcRenderer.invoke('get-tracker-info-by-path', filePath),
   getTrackerIndex: () => ipcRenderer.invoke('get-tracker-index'),
+  refreshTrackerIndex: () => ipcRenderer.invoke('refresh-tracker-index'),
   pathToFileURL: (p) => {
     try {
       const urlMod = require('url')

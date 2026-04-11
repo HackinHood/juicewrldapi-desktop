@@ -91,6 +91,7 @@ html,body{
   font-size:15px;font-weight:600;color:var(--text-primary);
 }
 .topbar-spacer{flex:1}
+#topbarRefreshBtn{margin-left:auto;flex-shrink:0}
 
 .hero-section{
   background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
@@ -162,7 +163,7 @@ html,body{
   transition:background .2s;align-self:flex-end;
 }
 .refresh-btn:hover{background:#4f46e5}
-.refresh-btn.spinning i{animation:spin 1s linear infinite}
+.refresh-btn.spinning i, .topbar-btn.spinning i{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .stats-section{

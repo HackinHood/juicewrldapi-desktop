@@ -369,6 +369,27 @@ function fmtDate(str) {
   return String(str).replace(/\n/g, ' ').replace(/\r/g, ' ').trim()
 }
 
+async function fullRefresh(btn) {
+  if (btn) btn.classList.add('spinning')
+  try {
+    state.apiChecked = false
+    await checkApiHealth()
+    updateDataSource()
+    if (state.useApi) {
+      await Promise.all([fetchStats(), fetchCategories(), fetchEras()])
+      updateHero()
+      renderStatChips()
+      populateFilters()
+      await fetchSongs(true)
+    }
+    try { await window.electronAPI.refreshTrackerIndex() } catch (_) {}
+  } catch (err) {
+    console.error('Refresh error:', err)
+  } finally {
+    if (btn) btn.classList.remove('spinning')
+  }
+}
+
 function setupEventListeners() {
   $('tbMin').onclick = () => window.electronAPI.minimizeWindow()
   $('tbMax').onclick = () => window.electronAPI.maximizeWindow()
@@ -390,21 +411,9 @@ function setupEventListeners() {
     state.searchTimeout = setTimeout(() => applyFilters(), 500)
   }
 
-  $('refreshBtn').onclick = async () => {
-    const btn = $('refreshBtn')
-    btn.classList.add('spinning')
-    state.apiChecked = false
-    await checkApiHealth()
-    updateDataSource()
-    if (state.useApi) {
-      await Promise.all([fetchStats(), fetchCategories(), fetchEras()])
-      updateHero()
-      renderStatChips()
-      populateFilters()
-      await fetchSongs(true)
-    }
-    btn.classList.remove('spinning')
-  }
+  $('refreshBtn').onclick = () => fullRefresh($('refreshBtn'))
+
+  $('topbarRefreshBtn').onclick = () => fullRefresh($('topbarRefreshBtn'))
 
   const body = document.querySelector('.tracker-body')
   body.addEventListener('scroll', () => {
