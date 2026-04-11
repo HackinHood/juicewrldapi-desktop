@@ -43,6 +43,36 @@ let crossfadeDuration = 0
 let crossfadeActive = false
 let crossfadeInterval = null
 let crossfadeAudio = null
+let trackerIndex = null
+let trackerPathMap = null
+
+function normalizeTrackerPath(p){ return String(p||'').replace(/\\/g, '/').trim() }
+
+function buildTrackerPathMap(){
+  if(!Array.isArray(trackerIndex) || trackerIndex.length === 0){ trackerPathMap = new Map(); return }
+  trackerPathMap = new Map()
+  for(const song of trackerIndex){
+    const norm = normalizeTrackerPath(song.path)
+    if(norm) trackerPathMap.set(norm, song)
+  }
+}
+
+function lookupTrackerInfo(filePath){
+  if(!trackerPathMap) return null
+  const norm = normalizeTrackerPath(filePath)
+  if(!norm) return null
+  return trackerPathMap.get(norm) || null
+}
+
+async function loadTrackerIndex(){
+  try{
+    const data = await window.electronAPI.getTrackerIndex()
+    if(Array.isArray(data) && data.length > 0){
+      trackerIndex = data
+      buildTrackerPathMap()
+    }
+  }catch(_){}
+}
 
 function shortenArtFilepath(fullPath){
   if(!fullPath || typeof fullPath !== 'string') return fullPath
@@ -234,45 +264,31 @@ function processFile(f){
 async function loadLibrary(){
   const res = await window.electronAPI.getLocalFiles()
   const files = (res&&res.files)||[]
-  
-  const INITIAL_BATCH = 150
-  const CHUNK_SIZE = 100
-  
+
   libraryItems = []
   filtered = []
   albums = new Map()
   artists = new Map()
-  
-  const initialFiles = files.slice(0, INITIAL_BATCH)
-  for(const f of initialFiles){
+
+  for(const f of files){
     const item = processFile(f)
-    if(item.isAudio || item.isVideo){
-      libraryItems.push(item)
-    }
+    if(item.isAudio || item.isVideo) libraryItems.push(item)
   }
+
+  try{
+    const bulkInput = libraryItems.map(it => ({ localPath: it.localPath, mtimeMs: it.mtimeMs }))
+    const thumbMap = await window.electronAPI.getThumbnailPathsBulk(bulkInput)
+    if(thumbMap && typeof thumbMap === 'object'){
+      for(const it of libraryItems){
+        if(thumbMap[it.localPath]) it.thumbnail = thumbMap[it.localPath]
+      }
+    }
+  }catch(_){}
+
   filtered = [...libraryItems]
   render()
-  
+
   ;(async()=>{
-    let processed = INITIAL_BATCH
-    while(processed < files.length){
-      const chunk = files.slice(processed, processed + CHUNK_SIZE)
-      const newItems = []
-      for(const f of chunk){
-        const item = processFile(f)
-        if(item.isAudio || item.isVideo){
-          libraryItems.push(item)
-          newItems.push(item)
-        }
-      }
-      filtered = [...libraryItems]
-      processed += CHUNK_SIZE
-      if(newItems.length > 0 && (currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists' || currentView==='favorites')){
-        try{ scheduleRerender() }catch(_){}
-      }
-      await new Promise(r=>setTimeout(r, 10))
-    }
-    
     if(!tryLoadCollectionsCache()){
       for(const item of libraryItems){
         const aKey = (item.album && String(item.album).trim()) ? String(item.album).trim() : 'Unknown Album'
@@ -290,32 +306,6 @@ async function loadLibrary(){
       if(h && h.success && Array.isArray(h.history)) playHistory = h.history
     }catch(_){}
     try{ if(currentView==='home' || currentView==='music' || currentView==='videos' || currentView==='albums' || currentView==='artists') scheduleRerender() }catch(_){}
-  })()
-  
-  ;(async function hydrateThumbnailsFromCache(){
-    const limit = Math.max(4, Math.min(16, (navigator.hardwareConcurrency||8)))
-    let idx = 0
-    async function run(){
-      while(true){
-        const i = idx++
-        if(i >= libraryItems.length) {
-          await new Promise(r=>setTimeout(r, 100))
-          if(i >= libraryItems.length) return
-        }
-        const it = libraryItems[i]
-        if(!it) continue
-        try{
-          const p = await window.electronAPI.getThumbnailPath(it.localPath, it.mtimeMs)
-          if(p){
-            it.thumbnail = p
-            try{ scheduleCardUpdate() }catch(_){}
-          }
-        }catch(_){ }
-      }
-    }
-    const workers = []
-    for(let i=0;i<limit;i++) workers.push(run())
-    await Promise.all(workers)
   })()
 }
 
@@ -2926,6 +2916,7 @@ function init(){
     settingsInit()
   }catch(_){ }
   try{ updateFavoriteBtnUI() }catch(_){ }
+  try{ loadTrackerIndex() }catch(_){ }
 }
 
 function updateFavoriteBtnUI(){
@@ -3443,8 +3434,10 @@ function openContextMenu(x, y, item, list, playlistIndex){
     hideContextMenu()
     const path = item.path || item.localPath || ''
     if(!path){ modal.open({ title: 'Tracker Info', message: 'No path for this item.', confirmText: 'OK' }); return }
-    let song = null
-    try{ song = await window.electronAPI.getTrackerInfoByPath(path) }catch(_){}
+    let song = lookupTrackerInfo(path)
+    if(!song){
+      try{ song = await window.electronAPI.getTrackerInfoByPath(path) }catch(_){}
+    }
     if(!song){
       modal.open({ title: 'Tracker Info', message: 'No tracker info found for this path.', confirmText: 'OK' })
       return

@@ -113,11 +113,26 @@ function setEnabled(enabled){
   state.enabled = !!enabled
   if(!state.enabled){
     try{ console.log('[DiscordRPC] Disabled') }catch(_){ }
-    try{ clear() }catch(_){ }
-    try{ if(state.client){ state.client.destroy() } }catch(_){ }
+    if(state.reconnectTimer){ try{ clearTimeout(state.reconnectTimer) }catch(_){ } state.reconnectTimer = null }
+    state.lastActivity = null
+    state.lastActivityString = null
+    const c = state.client
+    const conn = state.connected
     state.client = null
     state.connected = false
-    if(state.reconnectTimer){ try{ clearTimeout(state.reconnectTimer) }catch(_){ } state.reconnectTimer = null }
+    if(c){
+      const after = ()=>{
+        try{ c.destroy() }catch(_){ }
+      }
+      if(conn){
+        state.setActivityPromise = state.setActivityPromise
+          .then(()=>c.clearActivity().catch(()=>{}), ()=>c.clearActivity().catch(()=>{}))
+          .then(after, after)
+          .then(()=>undefined)
+      } else {
+        state.setActivityPromise = state.setActivityPromise.then(after, after).then(()=>undefined)
+      }
+    }
   }
   if(state.enabled && state.applicationId && RPC){ try{ init(state.applicationId) }catch(_){ } }
 }

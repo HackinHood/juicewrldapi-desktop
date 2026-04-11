@@ -112,6 +112,7 @@ const elements = {
         minimizeToTray: document.getElementById('minimizeToTray'),
                 showTrayNotifications: document.getElementById('showTrayNotifications'),
         darkModeMain: document.getElementById('darkModeMain'),
+        discordRpcEnabled: document.getElementById('discordRpcEnabled'),
         autoSyncEnabled: document.getElementById('autoSyncEnabled'),
         autoSyncInterval: document.getElementById('autoSyncInterval'),
     maxTransfers: document.getElementById('maxTransfers'),
@@ -464,6 +465,22 @@ function setupEventListeners() {
         elements.showTrayNotifications.addEventListener('change', markDirty);
         if (elements.darkModeMain) {
             elements.darkModeMain.addEventListener('change', () => { markDirty(); applyDarkModeMain(elements.darkModeMain.checked); });
+        }
+        if (elements.discordRpcEnabled) {
+            elements.discordRpcEnabled.addEventListener('change', async () => {
+                const enabled = elements.discordRpcEnabled.checked;
+                try {
+                    const latest = await window.electronAPI.getSettings();
+                    await window.electronAPI.saveSettings(Object.assign({}, latest, { discordRpcEnabled: enabled }));
+                    currentSettings = await window.electronAPI.getSettings();
+                    settingsBaseline = JSON.stringify(currentSettings);
+                    settingsDirty = false;
+                    updateUnsavedBadge();
+                } catch (err) {
+                    console.error('[Settings] Discord RPC toggle:', err);
+                    elements.discordRpcEnabled.checked = !enabled;
+                }
+            });
         }
         elements.autoSyncEnabled.addEventListener('change', markDirty);
         elements.autoSyncInterval.addEventListener('change', markDirty);
@@ -2310,6 +2327,9 @@ async function loadSettings() {
             elements.darkModeMain.checked = !!currentSettings.darkModeMain;
             applyDarkModeMain(!!currentSettings.darkModeMain);
         }
+        if (elements.discordRpcEnabled) {
+            elements.discordRpcEnabled.checked = currentSettings.discordRpcEnabled !== false;
+        }
         elements.autoSyncEnabled.checked = currentSettings.autoSyncEnabled;
         elements.autoSyncInterval.value = currentSettings.autoSyncInterval;
         
@@ -2691,7 +2711,9 @@ async function saveSettings() {
             customStoragePath: latest.customStoragePath,
             lastActiveTab: currentTab,
             crossfadeEnabled: elements.crossfadeEnabled ? elements.crossfadeEnabled.checked : !!latest.crossfadeEnabled,
-            crossfadeDuration: elements.crossfadeDuration ? parseInt(elements.crossfadeDuration.value) : (latest.crossfadeDuration || 5)
+            crossfadeDuration: elements.crossfadeDuration ? parseInt(elements.crossfadeDuration.value) : (latest.crossfadeDuration || 5),
+            discordRpcEnabled: elements.discordRpcEnabled ? elements.discordRpcEnabled.checked : (latest.discordRpcEnabled !== false),
+            discordRpcClientId: (typeof latest.discordRpcClientId === 'string' && latest.discordRpcClientId.trim()) ? latest.discordRpcClientId.trim() : '1401436107765452860'
         };
         
         await window.electronAPI.saveSettings(settings);
@@ -2719,6 +2741,9 @@ async function resetSettings() {
         if (elements.darkModeMain) {
             elements.darkModeMain.checked = false;
             applyDarkModeMain(false);
+        }
+        if (elements.discordRpcEnabled) {
+            elements.discordRpcEnabled.checked = true;
         }
         elements.autoSyncEnabled.checked = true;
         elements.autoSyncInterval.value = '30';
@@ -2750,9 +2775,10 @@ async function resetSettings() {
             selectedFolders: [],
             lastActiveTab: 'overview',
             crossfadeEnabled: false,
-            crossfadeDuration: 5
+            crossfadeDuration: 5,
+            discordRpcEnabled: true,
+            discordRpcClientId: '1401436107765452860'
         };
-        
         try {
             await window.electronAPI.saveSettings(resetSettings);
             currentSettings = resetSettings;

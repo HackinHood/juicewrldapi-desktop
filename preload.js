@@ -54,9 +54,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   triggerBackgroundSync: () => ipcRenderer.invoke('trigger-background-sync'),
   notifySyncComplete: () => ipcRenderer.invoke('notify-sync-complete'),
   getThumbnailPath: (localPath, mtimeMs) => ipcRenderer.invoke('get-thumbnail-path', localPath, mtimeMs),
+  getThumbnailPathsBulk: (items) => ipcRenderer.invoke('get-thumbnail-paths-bulk', items),
   saveThumbnail: (localPath, mtimeMs, dataUrl) => ipcRenderer.invoke('save-thumbnail', localPath, mtimeMs, dataUrl),
   generateVideoThumbnail: (localPath, mtimeMs) => ipcRenderer.invoke('generate-video-thumbnail', localPath, mtimeMs),
   getTrackerInfoByPath: (filePath) => ipcRenderer.invoke('get-tracker-info-by-path', filePath),
+  getTrackerIndex: () => ipcRenderer.invoke('get-tracker-index'),
   pathToFileURL: (p) => {
     try {
       const urlMod = require('url')

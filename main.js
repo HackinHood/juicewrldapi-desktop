@@ -1646,6 +1646,8 @@ ipcMain.handle('get-settings', () => {
     serverUrl: 'https://m.juicewrldapi.com',
     crossfadeEnabled: false,
     crossfadeDuration: 5,
+    discordRpcEnabled: true,
+    discordRpcClientId: '1401436107765452860',
     windowWidth: 1200,
     windowHeight: 800,
     windowX: undefined,
@@ -1666,6 +1668,16 @@ ipcMain.handle('get-tracker-info-by-path', async (event, filePath) => {
   } catch (e) {
     console.error('[Tracker] get-tracker-info-by-path failed:', e);
     return null;
+  }
+});
+
+ipcMain.handle('get-tracker-index', async () => {
+  try {
+    if (!songsTrackerIndex) await loadSongsTrackerIndex();
+    return songsTrackerIndex || [];
+  } catch (e) {
+    console.error('[Tracker] get-tracker-index failed:', e);
+    return [];
   }
 });
 
@@ -1690,12 +1702,27 @@ ipcMain.handle('save-settings', (event, settings) => {
     crossfadeEnabled: Boolean(settings.crossfadeEnabled),
     crossfadeDuration: Math.max(1, Math.min(10, parseInt(settings.crossfadeDuration) || 5)),
     darkModeMain: Boolean(settings.darkModeMain),
+    discordRpcEnabled: typeof settings.discordRpcEnabled === 'boolean' ? settings.discordRpcEnabled : (existingSettings.discordRpcEnabled !== false),
+    discordRpcClientId: (typeof settings.discordRpcClientId === 'string' && settings.discordRpcClientId.trim())
+      ? settings.discordRpcClientId.trim()
+      : (typeof existingSettings.discordRpcClientId === 'string' && existingSettings.discordRpcClientId.trim()
+        ? existingSettings.discordRpcClientId.trim()
+        : '1401436107765452860'),
     authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined
   };
 
   const sanitized = Object.fromEntries(Object.entries(validatedSettings).filter(([_, v]) => v !== undefined));
   const mergedSettings = { ...existingSettings, ...sanitized };
   store.set('settings', mergedSettings);
+
+  try {
+    const dEn = mergedSettings.discordRpcEnabled !== false
+    const dCid = (mergedSettings.discordRpcClientId && String(mergedSettings.discordRpcClientId).trim()) ? String(mergedSettings.discordRpcClientId).trim() : '1401436107765452860'
+    discordPresence.setEnabled(dEn)
+    if (dEn) {
+      discordPresence.init(dCid)
+    }
+  } catch (_) {}
   
   try {
     if (validatedSettings.startWithWindows !== undefined) {
@@ -1832,12 +1859,23 @@ ipcMain.handle('import-settings', async (event) => {
            selectedFolders: Array.isArray(importData.settings.selectedFolders) ? importData.settings.selectedFolders : [],
            customStoragePath: typeof importData.settings.customStoragePath === 'string' ? importData.settings.customStoragePath : undefined,
            lastActiveTab: ['overview', 'local-files', 'server-files', 'sync', 'settings', 'account'].includes(importData.settings.lastActiveTab) ? importData.settings.lastActiveTab : 'overview',
+           discordRpcEnabled: typeof importData.settings.discordRpcEnabled === 'boolean' ? importData.settings.discordRpcEnabled : (importData.settings.discordRpcEnabled !== false),
+           discordRpcClientId: typeof importData.settings.discordRpcClientId === 'string' && importData.settings.discordRpcClientId.trim()
+             ? importData.settings.discordRpcClientId.trim()
+             : '1401436107765452860',
            authData: importData.settings.authData && typeof importData.settings.authData === 'object' ? importData.settings.authData : undefined
          };
         
         store.set('settings', validatedSettings);
         console.log('[Settings] Settings imported successfully from:', filePath);
-        
+        try {
+          const dEnImp = validatedSettings.discordRpcEnabled !== false
+          const dCidImp = (validatedSettings.discordRpcClientId && String(validatedSettings.discordRpcClientId).trim()) ? String(validatedSettings.discordRpcClientId).trim() : '1401436107765452860'
+          discordPresence.setEnabled(dEnImp)
+          if (dEnImp) {
+            discordPresence.init(dCidImp)
+          }
+        } catch (_) {}
         try {
           if (validatedSettings.startWithWindows !== undefined) {
             const isSystemWide = app.isPackaged && !app.getPath('userData').includes(os.homedir());
@@ -3025,6 +3063,33 @@ ipcMain.handle('get-thumbnail-path', async (event, localPath, mtimeMs) => {
     return null;
   } catch (_) {
     return null;
+  }
+});
+
+ipcMain.handle('get-thumbnail-paths-bulk', async (event, items) => {
+  try {
+    if (!Array.isArray(items)) return {};
+    const crypto = require('crypto');
+    const { pathToFileURL } = require('url');
+    const dir = getThumbnailsPath();
+    const exts = ['.jpg', '.jpeg', '.png'];
+    const result = {};
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || typeof it.localPath !== 'string' || !it.localPath) continue;
+      const key = `${it.localPath}:${it.mtimeMs || 'na'}`;
+      const name = crypto.createHash('md5').update(key).digest('hex');
+      for (let j = 0; j < exts.length; j++) {
+        const p = path.join(dir, name + exts[j]);
+        if (fs.existsSync(p)) {
+          try { result[it.localPath] = pathToFileURL(p).href; } catch (_) { result[it.localPath] = p; }
+          break;
+        }
+      }
+    }
+    return result;
+  } catch (_) {
+    return {};
   }
 });
 
